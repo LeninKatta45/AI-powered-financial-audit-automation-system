@@ -27,3 +27,4 @@ weasyprint
 # HTML templating engine
 jinja2
 
+python-multipart
