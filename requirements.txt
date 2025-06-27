@@ -1,0 +1,29 @@
+# requirements.txt
+
+# Core web framework
+fastapi
+
+# ASGI server to run FastAPI
+uvicorn[standard]
+
+# For reading .env files
+python-dotenv
+
+# Data manipulation library
+pandas
+
+# For reading .xlsx files
+openpyxl
+
+# LLM routing and abstraction library
+litellm
+
+# For exponential backoff/retry logic
+tenacity
+
+# PDF generation from HTML
+weasyprint
+
+# HTML templating engine
+jinja2
+

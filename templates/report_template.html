@@ -1,0 +1,132 @@
+<!-- templates/report_template.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>AuditCopilot Report</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        body { font-family: 'Inter', sans-serif; color: #1f2937; margin: 0; padding: 0; }
+        .page { padding: 40px; }
+        .header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #e5e7eb; padding-bottom: 20px; }
+        .header h1 { color: #111827; font-size: 28px; margin: 0; }
+        .header-details { text-align: right; font-size: 12px; color: #4b5563; }
+        .summary-section { margin-top: 30px; background-color: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 20px; }
+        .summary-section h2 { font-size: 20px; color: #111827; margin-top: 0; }
+        .summary-block { margin-top: 15px; }
+        .summary-block h3 { font-size: 16px; color: #374151; margin-bottom: 5px; }
+        .summary-block p { font-size: 14px; color: #4b5563; margin: 0; line-height: 1.5; }
+        .findings-section { margin-top: 40px; }
+        .findings-section h2 { font-size: 22px; color: #111827; border-bottom: 1px solid #e5e7eb; padding-bottom: 10px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; font-size: 12px; }
+        th, td { border: 1px solid #e5e7eb; padding: 10px; text-align: left; }
+        th { background-color: #f3f4f6; font-weight: 600; }
+        .footer { position: fixed; bottom: 20px; left: 40px; right: 40px; font-size: 10px; color: #9ca3af; text-align: center; }
+        .page-break { page-break-before: always; }
+    </style>
+</head>
+<body>
+    <div class="page">
+        <div class="header">
+            <div>
+                <h1>AuditCopilot Findings Report</h1>
+                <p style="color: #6b7280; margin-top: 5px;">Confidential Automated Analysis</p>
+            </div>
+            <div class="header-details">
+                <strong>{{ company_name }}</strong><br>
+                Audit Period: {{ audit_period }}<br>
+                Report Date: {{ report_date }}
+            </div>
+        </div>
+
+        <div class="summary-section">
+            <h2>Executive Summary</h2>
+            <div class="summary-block">
+                <h3>Vendor & Payment Risks</h3>
+                <p>{{ vendor_summary }}</p>
+            </div>
+            <div class="summary-block">
+                <h3>GST Compliance & ITC Reconciliation</h3>
+                <p>{{ gst_summary }}</p>
+            </div>
+            <div class="summary-block">
+                <h3>TDS Compliance Risks</h3>
+                <p>{{ tds_summary }}</p>
+            </div>
+        </div>
+
+        {% if vendor_findings %}
+        <div class="findings-section">
+            <h2>Vendor & Payment Findings</h2>
+            <table>
+                <thead>
+                    <tr><th>Type</th><th>Vendor</th><th>Invoice</th><th>Amount (₹)</th><th>Details</th></tr>
+                </thead>
+                <tbody>
+                    {% for item in vendor_findings %}
+                    <tr>
+                        <td>{{ item.issue_type }}</td>
+                        <td>{{ item.vendor }}</td>
+                        <td>{{ item.invoice_number }}</td>
+                        <td>{{ "%.2f"|format(item.amount) if item.amount else 'N/A' }}</td>
+                        <td>{{ item.details }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+        
+        
+
+        {% if gst_findings %}
+        <div class="findings-section">
+            <h2>GST Compliance Findings</h2>
+            <table>
+                 <thead>
+                    <tr><th>Type</th><th>Vendor</th><th>Invoice</th><th>Amount (₹)</th><th>Details</th></tr>
+                </thead>
+                <tbody>
+                    {% for item in gst_findings %}
+                    <tr>
+                        <td>{{ item.issue_type }}</td>
+                        <td>{{ item.vendor }}</td>
+                        <td>{{ item.invoice_number }}</td>
+                        <td>{{ "%.2f"|format(item.amount) }}</td>
+                        <td>{{ item.details }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+
+        {% if tds_findings %}
+        <div class="findings-section">
+            <h2>TDS Compliance Findings</h2>
+            <table>
+                <thead>
+                    <tr><th>Type</th><th>Vendor</th><th>Amount Paid (₹)</th><th>Section</th><th>TDS Expected (₹)</th><th>TDS Deducted (₹)</th></tr>
+                </thead>
+                <tbody>
+                    {% for item in tds_findings %}
+                    <tr>
+                        <td>{{ item.issue_type }}</td>
+                        <td>{{ item.vendor }}</td>
+                        <td>{{ "%.2f"|format(item.amount_paid) }}</td>
+                        <td>{{ item.section }}</td>
+                        <td>{{ "%.2f"|format(item.expected_tds) }}</td>
+                        <td>{{ "%.2f"|format(item.tds_deducted if item.tds_deducted is not none else 0) }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+
+        <div class="footer">
+            Generated by AuditCopilot | Page <span class="page-num"></span>
+        </div>
+    </div>
+</body>
+</html>
