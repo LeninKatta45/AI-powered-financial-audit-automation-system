@@ -20,9 +20,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 from litellm import acompletion
 from tenacity import retry, stop_after_attempt, wait_random_exponential
 
-@app.get("/ping")
-async def ping():
-    return {"status": "ok", "message": "TrueAudit is alive"}
+
 # ==================== CONFIGURATION ====================
 #load_dotenv() # Load .env for local development
 
@@ -47,7 +45,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
+@app.get("/ping")
+async def ping():
+    return {"status": "ok", "message": "TrueAudit is alive"}
+    
 env = Environment(loader=FileSystemLoader("templates"), autoescape=select_autoescape(["html"]), enable_async=True)
 
 # ==================== AI MAPPING & CORE LOGIC ====================
