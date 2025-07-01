@@ -3,55 +3,135 @@ import os
 import pandas as pd
 import io
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Dict, Any
 import json
 import asyncio
 
 # --- FastAPI and Web Dependencies ---
-from fastapi import FastAPI, UploadFile, File, HTTPException, Form
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Depends
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from weasyprint import HTML
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 # --- AI and Data Processing Dependencies ---
-#from dotenv import load_dotenv
 from litellm import acompletion
 from tenacity import retry, stop_after_attempt, wait_random_exponential
 
+# [SECURITY] Import new dependencies for payment & token security
+import razorpay
+from pydantic import BaseModel
+from jose import JWTError, jwt
+from fastapi.security import OAuth2PasswordBearer
 
 # ==================== CONFIGURATION ====================
-#load_dotenv() # Load .env for local development
 
-# Get the API key from the environment.
-# In the cloud (Render), this comes from the Environment Variables you set.
-# Locally, this comes from your .env file.
+# [SECURITY] Load all necessary environment variables for Razorpay & JWT
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID")
+RAZORPAY_SECRET_KEY = os.getenv("RAZORPAY_SECRET_KEY")
+JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+JWT_ALGORITHM = "HS256"
 
-# CRITICAL: Check if the key was actually found.
-# If not, the app cannot run. Fail fast with a clear error message.
-if not GROQ_API_KEY:
-    raise ValueError("FATAL ERROR: GROQ_API_KEY environment variable not set. The application cannot start.")
+# [SECURITY] Fail fast if critical security variables are missing
+if not all([GROQ_API_KEY, RAZORPAY_KEY_ID, RAZORPAY_SECRET_KEY, JWT_SECRET_KEY]):
+    raise ValueError("FATAL ERROR: One or more required environment variables (GROQ, RAZORPAY, JWT) are not set.")
 
-# Set the key for any library (like litellm) that might read it directly from os.environ
 os.environ["GROQ_API_KEY"] = GROQ_API_KEY
 
-app = FastAPI(title="AuditCopilot - Automated Analysis Engine")
+app = FastAPI(title="Envisort - Automated Analysis Engine") # Renamed for consistency
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"], # In production, restrict this to your frontend URL: ["https://envisort.vercel.app"]
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# [SECURITY] Initialize Razorpay client instance
+razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_SECRET_KEY))
+
+# [SECURITY] Pydantic models for request body validation
+class PaymentVerificationData(BaseModel):
+    razorpay_order_id: str
+    razorpay_payment_id: str
+    razorpay_signature: str
+
+# [SECURITY] OAuth2 scheme to extract token from Authorization header
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token") # tokenUrl isn't used, but required
+
+# [SECURITY] Dependency function to verify JWT and protect endpoints
+async def get_current_user_from_token(token: str = Depends(oauth2_scheme)):
+    credentials_exception = HTTPException(
+        status_code=401,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+        payment_id: str = payload.get("sub")
+        if payment_id is None:
+            raise credentials_exception
+    except JWTError:
+        raise credentials_exception
+    return {"payment_id": payment_id}
+
 @app.get("/ping")
 async def ping():
-    return {"status": "ok", "message": "TrueAudit is alive"}
+    return {"status": "ok", "message": "Envisort is alive"}
     
 env = Environment(loader=FileSystemLoader("templates"), autoescape=select_autoescape(["html"]), enable_async=True)
 
-# ==================== AI MAPPING & CORE LOGIC ====================
+# ==================== NEW SECURITY ENDPOINTS ====================
+
+@app.post("/create-order/", tags=["Payment"])
+async def create_order():
+    """
+    Creates a Razorpay order. The frontend calls this before showing the payment modal.
+    """
+    try:
+        order_data = {
+            "amount": 1180000,  # Amount in paise (11,800 INR)
+            "currency": "INR",
+            "receipt": f"receipt_envisort_{uuid.uuid4()}",
+        }
+        order = razorpay_client.order.create(data=order_data)
+        return {"orderId": order["id"], "keyId": RAZORPAY_KEY_ID}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error creating Razorpay order: {e}")
+
+@app.post("/verify-payment/", tags=["Payment"])
+async def verify_payment(data: PaymentVerificationData):
+    """
+    Verifies a payment after the user completes it on the frontend.
+    If successful, returns a secure JWT access token.
+    """
+    try:
+        # This function cryptographically verifies the payment signature
+        razorpay_client.utility.verify_payment_signature({
+            'razorpay_order_id': data.razorpay_order_id,
+            'razorpay_payment_id': data.razorpay_payment_id,
+            'razorpay_signature': data.razorpay_signature
+        })
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="Payment verification failed: Invalid signature.")
+
+    # Payment is verified. Now, create a secure access token (JWT).
+    to_encode = {
+        "sub": data.razorpay_payment_id, # Subject of the token
+        "exp": datetime.utcnow() + timedelta(hours=1) # Token is valid for 1 hour
+    }
+    access_token = jwt.encode(to_encode, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+    
+    return {"status": "success", "accessToken": access_token}
+
+
+# ==================== AI MAPPING & CORE LOGIC (UNCHANGED) ====================
+
+# All your existing functions from FIELD_DESCRIPTION_MAP to generate_summary
+# remain exactly the same. No changes needed here.
+# ... (all your existing functions) ...
 
 FIELD_DESCRIPTION_MAP = {
     "Invoice_Date": "Date when the invoice was issued", "Invoice_Number": "Unique number of the invoice",
@@ -140,41 +220,36 @@ def calculate_gst_totals(findings: List[Dict[str, Any]]) -> Dict[str, Any]:
 async def generate_summary(summary_data: Dict[str, Any], issue_category: str) -> str:
     if not summary_data.get("detailed_findings"): return f"No significant issues found."
     summary_json = json.dumps(summary_data);
-# The new, combined prompt for the generate_summary function in main.py
-
     prompt = f"""As a senior financial auditor, your task is to write a brief, professional summary paragraph for a busy CFO based *only* on the data provided below.
-
     **CRITICAL INSTRUCTIONS:**
-
     1.  **Source of Truth:** The financial totals in the provided JSON data are the absolute source of truth. You MUST repeat these numbers exactly as they appear in your summary. For example, if the data shows `{{"risky_itc_exposure": 253700.0, ...}}`, your summary text absolutely must include the number `253,700`. Do not add, remove, or change any digits.
-
     2.  **Content Focus:** Your paragraph should concisely cover three things:
         *   State the primary financial impact using the pre-calculated totals.
         *   Explain the business risk or opportunity (e.g., "This exposes the company to penalties..." or "This represents a missed opportunity to improve cash flow...").
         *   Provide a high-level, actionable recommendation for the finance team.
-
     3.  **Format:**
         *   A single, professional paragraph.
         *   Do NOT use bullet points or markdown lists.
         *   Maintain the persona of an experienced auditor addressing a CFO.
-
     **Category to Summarize:** {issue_category}
-
     **Data (Source of Truth):**
     {summary_json[:2500]}"""
     try: response = await acompletion(model="groq/llama3-70b-8192", messages=[{"role": "user", "content": prompt}], max_tokens=300); return response.choices[0].message.content.strip()
     except Exception as e: return f"Could not generate AI summary: {e}"
 
-# ==================== FASTAPI ENDPOINT ====================
+# ==================== SECURED FASTAPI ENDPOINT ====================
 
 @app.post("/generate-report-from-files/", tags=["Report Generation"])
 async def generate_report_from_files(
     company_name: str = Form(...),
     purchase_file: UploadFile = File(...),
     tds_file: UploadFile = File(...),
-    gstr2b_file: UploadFile = File(...)
+    gstr2b_file: UploadFile = File(...),
+    # [SECURITY] This dependency protects the endpoint. It will raise a 401 error if the token is invalid/missing.
+    current_user: dict = Depends(get_current_user_from_token)
 ):
     # --- 1. Process Files ---
+    # The code below will ONLY run if the token is valid, thanks to the Depends() above.
     try:
         p_content, t_content, g_content = await asyncio.gather(purchase_file.read(), tds_file.read(), gstr2b_file.read())
         p_df = pd.read_csv(io.BytesIO(p_content), dtype=str, keep_default_na=False) if purchase_file.filename.endswith('.csv') else pd.read_excel(io.BytesIO(p_content), engine='openpyxl', dtype=str, keep_default_na=False)

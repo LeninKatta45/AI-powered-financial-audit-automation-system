@@ -28,3 +28,9 @@ weasyprint
 jinja2
 
 python-multipart
+
+razorpay
+
+python-jose[cryptography]
+
+setuptools
