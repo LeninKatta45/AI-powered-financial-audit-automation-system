@@ -94,9 +94,11 @@ async def create_order():
         order_data = {
             "amount": 1180000,  # Amount in paise (11,800 INR)
             "currency": "INR",
-            "receipt": f"receipt_envisort_{uuid.uuid4()}",
+            "receipt": f"rcpt_{uuid.uuid4().hex}",
         }
+        
         order = razorpay_client.order.create(data=order_data)
+        
         return {"orderId": order["id"], "keyId": RAZORPAY_KEY_ID}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error creating Razorpay order: {e}")
