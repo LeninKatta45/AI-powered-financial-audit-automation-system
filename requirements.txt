@@ -41,7 +41,7 @@ psycopg2-binary
 
 resend
 
-"pydantic[email]"
+pydantic
 
 
 
