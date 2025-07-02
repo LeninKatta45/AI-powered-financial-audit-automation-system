@@ -34,3 +34,15 @@ razorpay
 python-jose[cryptography]
 
 setuptools
+
+sqlalchemy
+
+psycopg2-binary
+
+resend
+
+
+
+
+
+
