@@ -92,7 +92,7 @@ async def create_order():
     """
     try:
         order_data = {
-            "amount": 1180000,  # Amount in paise (11,800 INR)
+            "amount": 100,  # Amount in paise (11,800 INR)
             "currency": "INR",
             "receipt": f"rcpt_{uuid.uuid4().hex}",
         }
