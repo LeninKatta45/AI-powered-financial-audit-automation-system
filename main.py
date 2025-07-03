@@ -78,7 +78,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
+@app.get("/ping")
+async def ping():
+    return {"status": "ok", "message": "Envisort is alive"}
 # Initialize Jinja2 environment for PDF templates
 env = Environment(loader=FileSystemLoader("templates"), autoescape=select_autoescape(["html"]), enable_async=True)
 
