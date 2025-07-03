@@ -1,4 +1,6 @@
-# main.py - COMPLETE MERGED VERSION WITH USER ACCOUNTS & SECURITY
+# main.py - FINAL ARCHITECTURE with Sign-up, Login, and Payment Flow
+# main.py - FINAL ARCHITECTURE with Sign-up, Login, and Payment Flow
+
 import os
 import uuid
 from datetime import datetime, timedelta
@@ -7,33 +9,30 @@ import asyncio
 from typing import List, Dict, Any
 import pandas as pd
 import io
-from requests.exceptions import ConnectionError as RequestsConnectionError
-# --- FastAPI and Web Dependencies ---
+import resend
+# --- Dependencies ---
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Depends
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
-from weasyprint import HTML
-from jinja2 import Environment, FileSystemLoader, select_autoescape
-
-# --- AI and Data Processing Dependencies ---
-from litellm import acompletion
-from tenacity import retry, stop_after_attempt, wait_random_exponential
-
-# --- Security, Database & Email Dependencies ---
-import razorpay
+from sqlalchemy.orm import Session
 from pydantic import BaseModel, EmailStr
+from passlib.context import CryptContext
 from jose import JWTError, jwt
 from fastapi.security import OAuth2PasswordBearer
-from sqlalchemy.orm import Session
 from dotenv import load_dotenv
-import resend
+import razorpay
+from weasyprint import HTML
+from jinja2 import Environment, FileSystemLoader, select_autoescape
+from litellm import acompletion
+from tenacity import retry, stop_after_attempt, wait_random_exponential
+from contextlib import asynccontextmanager
+# --- Local Project Imports ---
+import models
+from database import SessionLocal, engine
 
-import models  # REMOVED the dot
-from database import SessionLocal, engine # REMOVED the dot
-
-# --- Initial Setup ---
+# --- Initial Setup: Load Env & Create DB Tables ---
 load_dotenv()
-models.Base.metadata.create_all(bind=engine)  # This creates the 'users' table if it doesn't exist
+
 
 # ==================== CONFIGURATION ====================
 # Load all necessary environment variables
@@ -41,48 +40,73 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 RAZORPAY_KEY_ID = os.getenv("RAZORPAY_KEY_ID")
 RAZORPAY_SECRET_KEY = os.getenv("RAZORPAY_SECRET_KEY")
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
-RESEND_API_KEY = os.getenv("RESEND_API_KEY")
-FRONTEND_URL = os.getenv("FRONTEND_URL") 
+FRONTEND_URL = os.getenv("FRONTEND_URL")
+RESEND_API_KEY=os.getenv("RESEND_API_KEY")
 # Fail fast if critical security variables are missing
-if not all([GROQ_API_KEY, RAZORPAY_KEY_ID, RAZORPAY_SECRET_KEY, JWT_SECRET_KEY, RESEND_API_KEY]):
+if not all([GROQ_API_KEY, RAZORPAY_KEY_ID, RAZORPAY_SECRET_KEY, JWT_SECRET_KEY,FRONTEND_URL,RESEND_API_KEY]):
     raise ValueError("FATAL ERROR: One or more required environment variables are not set.")
 
 os.environ["GROQ_API_KEY"] = GROQ_API_KEY
-resend.api_key = RESEND_API_KEY
 JWT_ALGORITHM = "HS256"
 
-# Initialize Razorpay client
+resend.api_key = RESEND_API_KEY
+# Password Hashing Context
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# Initialize Razorpay client with the corrected variable name
 razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_SECRET_KEY))
 
-app = FastAPI(title="Envisort - Secure Analysis Engine")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # This code runs on startup
+    print("Application startup: Creating database tables if they don't exist...")
+    try:
+        models.Base.metadata.create_all(bind=engine)
+        print("Application startup: Database tables checked/created successfully.")
+    except Exception as e:
+        print(f"!!! FATAL ERROR during startup: Could not connect to database. {e}")
+    
+    yield
+    # This code runs on shutdown (optional)
+    print("Application shutdown.")
+
+app = FastAPI(title="Envisort - Secure Analysis Engine", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "https://envisort.vercel.app"],
+    allow_origins=["http://localhost:3000", "https://envisort.vercel.app"], # Replace with your final frontend URL
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Initialize Jinja2 environment
-env = Environment(
-    loader=FileSystemLoader("templates"), 
-    autoescape=select_autoescape(["html"]), 
-    enable_async=True
-)
+# Initialize Jinja2 environment for PDF templates
+env = Environment(loader=FileSystemLoader("templates"), autoescape=select_autoescape(["html"]), enable_async=True)
 
-# --- Pydantic Models for Request Validation ---
+# --- Pydantic Models for API Validation ---
+class UserCreate(BaseModel):
+    email: EmailStr
+    password: str
+
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
+
 class PaymentVerificationData(BaseModel):
     razorpay_order_id: str
     razorpay_payment_id: str
     razorpay_signature: str
 
+
+# This model is used by /request-password-reset
 class EmailSchema(BaseModel):
-    email: EmailStr
+    email: EmailStr    
 
-class TokenData(BaseModel):
+# --- Add this new Pydantic model at the top with the others ---
+class PasswordResetRequest(BaseModel):
     token: str
+    new_password: str
 
-# --- Database Dependency ---
+# --- Helper Functions ---
 def get_db():
     db = SessionLocal()
     try:
@@ -90,8 +114,11 @@ def get_db():
     finally:
         db.close()
 
-# --- Security & Token Functions ---
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+def verify_password(plain_password, hashed_password):
+    return pwd_context.verify(plain_password, hashed_password)
+
+def get_password_hash(password):
+    return pwd_context.hash(password)
 
 def create_access_token(data: dict, expires_delta: timedelta):
     to_encode = data.copy()
@@ -99,8 +126,10 @@ def create_access_token(data: dict, expires_delta: timedelta):
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
 
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
+
 async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)):
-    credentials_exception = HTTPException(status_code=401, detail="Could not validate credentials")
+    credentials_exception = HTTPException(status_code=401, detail="Could not validate credentials", headers={"WWW-Authenticate": "Bearer"})
     try:
         payload = jwt.decode(token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
         email: str = payload.get("sub")
@@ -110,73 +139,206 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
         user = db.query(models.User).filter(models.User.email == email).first()
         if user is None:
             raise credentials_exception
-        
-        # Robust check: does the user in the database have valid access?
-        if user.access_valid_until is None or user.access_valid_until < datetime.utcnow():
-             raise HTTPException(status_code=403, detail="Your access has expired. Please make a new payment.")
-
     except JWTError:
         raise credentials_exception
     return user
 
-# ==================== BASIC ENDPOINTS ====================
+async def get_current_active_user(current_user: models.User = Depends(get_current_user)):
+    """A dependency that checks if the user from the token has active access."""
+    if current_user.access_valid_until is None or current_user.access_valid_until < datetime.utcnow():
+        raise HTTPException(status_code=403, detail="Your access has expired. Please complete the payment to proceed.")
+    return current_user
 
-@app.get("/ping")
-async def ping():
-    return {"status": "ok", "message": "Envisort is alive"}
 
-# ==================== AUTH & PAYMENT ENDPOINTS ====================
+
+# ==================== AUTHENTICATION ENDPOINTS ====================
+
+@app.post("/signup", tags=["Authentication"])
+async def signup(user_data: UserCreate, db: Session = Depends(get_db)):
+    """Registers a new user."""
+    print(f"\n--- SIGNUP REQUEST RECEIVED for {user_data.email} ---")
+    
+    try:
+        # Step 1: Check if user exists
+        print("[Signup] STEP 1: Checking database for existing user...")
+        db_user = db.query(models.User).filter(models.User.email == user_data.email).first()
+        print("[Signup] STEP 1 SUCCESS: Database check complete.")
+        
+        if db_user:
+            print(f"[Signup] ERROR: User {user_data.email} already exists.")
+            raise HTTPException(status_code=400, detail="An account with this email already exists.")
+        
+        # Step 2: Hash the password
+        print("[Signup] STEP 2: Hashing password...")
+        hashed_password = get_password_hash(user_data.password)
+        print("[Signup] STEP 2 SUCCESS: Password hashed.")
+        
+        # Step 3: Create the new user object
+        print("[Signup] STEP 3: Creating new user object in memory...")
+        new_user = models.User(email=user_data.email, hashed_password=hashed_password)
+        print("[Signup] STEP 3 SUCCESS: User object created.")
+        
+        # Step 4: Add to database session and commit
+        print("[Signup] STEP 4: Adding user to DB session and committing...")
+        db.add(new_user)
+        db.commit()
+        db.refresh(new_user)
+        print(f"[Signup] STEP 4 SUCCESS: User {new_user.email} committed to database with ID {new_user.id}.")
+        
+        # Step 5: Create access token
+        print("[Signup] STEP 5: Creating access token...")
+        access_token = create_access_token(data={"sub": new_user.email}, expires_delta=timedelta(days=1))
+        print("[Signup] STEP 5 SUCCESS: Access token created.")
+        
+        print("--- SIGNUP PROCESS COMPLETED SUCCESSFULLY ---")
+        return {"accessToken": access_token, "email": new_user.email}
+
+    except Exception as e:
+        # This will catch any unexpected crash and report it
+        print(f"!!! CRITICAL ERROR DURING SIGNUP: {e}")
+        # Rollback the transaction if something failed, especially after adding to session
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"An internal server error occurred during signup: {str(e)}")
+
+@app.post("/login", tags=["Authentication"])
+async def login(form_data: UserLogin, db: Session = Depends(get_db)):
+    """Logs in an existing user."""
+    user = db.query(models.User).filter(models.User.email == form_data.email).first()
+    if not user or not user.hashed_password or not verify_password(form_data.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Incorrect email or password.")
+
+    access_token = create_access_token(data={"sub": user.email}, expires_delta=timedelta(days=1))
+    return {"accessToken": access_token}
+
+
+@app.post("/request-password-reset", tags=["Authentication"])
+async def request_password_reset(data: EmailSchema, db: Session = Depends(get_db)):
+    """If a user exists, sends them a password reset link."""
+    print(f"\n--- PASSWORD RESET REQUEST for {data.email} ---")
+    
+    user = db.query(models.User).filter(models.User.email == data.email).first()
+    
+    # This conditional block is the core logic.
+    # It ensures we only attempt to send an email if a user actually exists.
+    if user:
+        print(f"SUCCESS: Found user in DB with ID: {user.id}")
+        
+        # Create a short-lived token specifically for password reset
+        reset_token = create_access_token(
+            data={"sub": user.email, "purpose": "password_reset"}, 
+            expires_delta=timedelta(minutes=30)
+        )
+        
+        # Construct the full link using your environment variable
+        reset_link = f"{FRONTEND_URL}/reset-password?token={reset_token}"
+        
+        # ===== THIS IS THE REAL EMAIL SENDING LOGIC =====
+        try:
+            print(f"Attempting to send password reset email to {user.email}...")
+            
+            # The actual API call to Resend
+            resend.Emails.send({
+                "from": "onboarding@resend.dev",  # IMPORTANT: Use a verified domain you own
+                "to": user.email,
+                "subject": "Your Envisort Password Reset Request",
+                "html": f"""
+                    <div style="font-family: Arial, sans-serif; line-height: 1.6;">
+                        <h2>Envisort Password Reset</h2>
+                        <p>Hello,</p>
+                        <p>We received a request to reset the password for your account. Please click the link below to set a new password. This link is only valid for 30 minutes.</p>
+                        <p style="margin: 20px 0;">
+                            <a href="{reset_link}" style="display: inline-block; padding: 12px 24px; background-color: #2563EB; color: white; text-decoration: none; border-radius: 8px;">
+                                Reset Your Password
+                            </a>
+                        </p>
+                        <p>If you did not request a password reset, please ignore this email or contact support if you have concerns.</p>
+                        <p>Thank you,<br>The Envisort Team</p>
+                    </div>
+                """
+            })
+            
+            print(f"SUCCESS: Password reset email sent to {user.email}.")
+            
+        except Exception as e:
+            # If email sending fails, log the error but do not expose it to the user.
+            # This prevents revealing whether an email address is registered or not.
+            print(f"!!! CRITICAL ERROR: Could not send password reset email: {e}")
+            # Do not raise an HTTPException here for security reasons.
+        # ===============================================
+            
+    else:
+        # If no user was found, we just print a log for our own debugging.
+        # We do NOT tell the frontend that the user doesn't exist.
+        print(f"INFO: No user found for email: {data.email}. No email will be sent.")
+
+    # Always return the same generic message to prevent email enumeration attacks.
+    return {"message": "If an account exists for this email, a password reset link has been sent."}
+
+
+@app.post("/confirm-password-reset", tags=["Authentication"])
+async def confirm_password_reset(data: PasswordResetRequest, db: Session = Depends(get_db)):
+    """Verifies reset token and updates the user's password."""
+    credentials_exception = HTTPException(status_code=400, detail="Invalid or expired reset token.")
+    try:
+        payload = jwt.decode(data.token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
+        
+        # Check that the token was specifically for a password reset
+        if payload.get("purpose") != "password_reset":
+            raise credentials_exception
+            
+        email: str = payload.get("sub")
+        if email is None:
+            raise credentials_exception
+        
+        user = db.query(models.User).filter(models.User.email == email).first()
+        if user is None:
+            raise credentials_exception
+
+        # Update the password
+        user.hashed_password = get_password_hash(data.new_password)
+        db.commit()
+
+    except JWTError:
+        raise credentials_exception
+        
+    return {"message": "Password has been updated successfully. Please log in."}    
+
+# ==================== PAYMENT ENDPOINTS ====================
 
 @app.post("/create-order/", tags=["Payment"])
-async def create_order(data: EmailSchema, db: Session = Depends(get_db)):
-    """Creates a user if they don't exist and a Razorpay order linked to their email."""
-    user = db.query(models.User).filter(models.User.email == data.email).first()
-    if not user:
-        print(f"New user detected: {data.email}. Creating account.")
-        user = models.User(email=data.email)
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-
+async def create_order(current_user: models.User = Depends(get_current_user)):
+    """Creates a Razorpay order for the currently logged-in user."""
+    order_data = {
+        "amount": 100,
+        "currency": "INR",
+        "receipt": f"rcpt_{uuid.uuid4().hex}",
+        "notes": {"user_id": current_user.id} # Link order to user ID for robust tracking
+    }
     try:
-        order_data = {
-            "amount": 100,
-            "currency": "INR",
-            "receipt": f"rcpt_{uuid.uuid4().hex}",
-            "notes": {"user_email": data.email}
-        }
         order = razorpay_client.order.create(data=order_data)
         return {"orderId": order["id"], "keyId": RAZORPAY_KEY_ID, "amount": order_data["amount"]}
-
-    # CATCH THE SPECIFIC NETWORK ERROR FIRST
-    except RequestsConnectionError:
-        print("!!! NETWORK ERROR: Failed to connect to Razorpay.")
-        raise HTTPException(
-            status_code=503, # Service Unavailable
-            detail="Could not connect to the payment service. Please check your internet connection and try again."
-        )
-    # Catch any other errors from Razorpay
     except Exception as e:
         print(f"!!! RAZORPAY API ERROR: {e}")
-        raise HTTPException(status_code=500, detail=f"An error occurred with the payment provider: {e}")
+        raise HTTPException(status_code=500, detail=f"An error occurred with the payment provider.")
+
 
 @app.post("/verify-payment/", tags=["Payment"])
 async def verify_payment(data: PaymentVerificationData, db: Session = Depends(get_db)):
-    """Verifies payment, grants access in the DB, and issues an immediate access token."""
+    """Verifies payment and grants access in the DB."""
     try:
         razorpay_client.utility.verify_payment_signature(data.dict())
         
         order = razorpay_client.order.fetch(data.razorpay_order_id)
-        user_email = order['notes'].get('user_email')
-        if not user_email:
-            raise HTTPException(status_code=400, detail="User email not found in order notes.")
+        user_id = order['notes'].get('user_id')
+        if not user_id:
+            raise HTTPException(status_code=400, detail="User ID not found in order notes.")
 
-        user = db.query(models.User).filter(models.User.email == user_email).first()
+        user = db.query(models.User).filter(models.User.id == user_id).first()
         if not user:
-            raise HTTPException(status_code=404, detail=f"User with email {user_email} not found.")
+            raise HTTPException(status_code=404, detail=f"User with ID {user_id} not found.")
 
-        # Grant access for 24 hours
-        user.access_valid_until = datetime.utcnow() + timedelta(days=1)
+        # Grant access for 1 year (as an example for a full subscription)
+        user.access_valid_until = datetime.utcnow() + timedelta(days=365)
         user.last_payment_id = data.razorpay_payment_id
         db.commit()
         print(f"Access granted for user {user.email} until {user.access_valid_until}")
@@ -184,52 +346,8 @@ async def verify_payment(data: PaymentVerificationData, db: Session = Depends(ge
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Payment verification failed: {e}")
 
-    # Issue an immediate access token valid for the same duration
-    access_token = create_access_token(data={"sub": user.email}, expires_delta=timedelta(days=1))
-    return {"status": "success", "accessToken": access_token}
+    return {"status": "success", "message": "Payment successful. Access granted."}
 
-@app.post("/request-magic-link/", tags=["Authentication"])
-async def request_magic_link(data: EmailSchema, db: Session = Depends(get_db)):
-    """If a user has valid access, sends them a single-use login link."""
-    user = db.query(models.User).filter(models.User.email == data.email).first()
-    if user and user.access_valid_until and user.access_valid_until > datetime.utcnow():
-        # Create a short-lived token specifically for login
-        login_token = create_access_token(data={"sub": user.email}, expires_delta=timedelta(minutes=15))
-        magic_link = f"{FRONTEND_URL}/verify-login?token={login_token}"
-        
-        try:
-            resend.Emails.send({
-                "from": "onboarding@resend.dev",  # IMPORTANT: Use a verified sender from your Resend account
-                "to": user.email,
-                "subject": "Your Envisort Login Link",
-                "html": f"<h3>Hello!</h3><p>Click the link below to securely log in to your Envisort account. This link will expire in 15 minutes.</p><a href='{magic_link}' style='display:inline-block;padding:12px 24px;background-color:#2563EB;color:white;text-decoration:none;border-radius:8px;'>Log In to Envisort</a>"
-            })
-            print(f"Magic link sent to {user.email}")
-            print(f"--> Link URL: {magic_link}") 
-        except Exception as e:
-            print(f"ERROR: Could not send email via Resend: {e}")
-            raise HTTPException(status_code=500, detail="Could not send login email. Please try again later.")
-
-    return {"message": "If an account with valid access exists for this email, a login link has been sent."}
-
-@app.post("/complete-login/", tags=["Authentication"])
-async def complete_login(data: TokenData, db: Session = Depends(get_db)):
-    """Verifies a magic link token and issues a standard access token."""
-    try:
-        payload = jwt.decode(data.token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
-        email: str = payload.get("sub")
-        if email is None:
-            raise HTTPException(status_code=401, detail="Invalid login token.")
-        
-        user = db.query(models.User).filter(models.User.email == email).first()
-        if not (user and user.access_valid_until and user.access_valid_until > datetime.utcnow()):
-            raise HTTPException(status_code=403, detail="Access denied or expired for this account.")
-
-        # Issue a new standard access token
-        access_token = create_access_token(data={"sub": user.email}, expires_delta=timedelta(days=1))
-        return {"accessToken": access_token}
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid or expired login token.")
 
 # ==================== DATA ANALYSIS FUNCTIONS ====================
 
@@ -485,7 +603,7 @@ async def generate_report_from_files(
     purchase_file: UploadFile = File(...),
     tds_file: UploadFile = File(...),
     gstr2b_file: UploadFile = File(...),
-    current_user: models.User = Depends(get_current_user)  # Now protected by the robust dependency
+    current_user: models.User = Depends(get_current_active_user)  # Now protected by the robust dependency
 ):
     print(f"SECURITY CHECK PASSED: Report generation authorized for user: {current_user.email}")
     print(f"[{datetime.now()}] --- NEW REPORT REQUEST ---")
