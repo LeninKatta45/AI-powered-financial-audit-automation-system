@@ -70,17 +70,17 @@ async def lifespan(app: FastAPI):
     # This code runs on shutdown (optional)
     print("Application shutdown.")
 
-app = FastAPI(title="Envisort - Secure Analysis Engine", lifespan=lifespan)
+app = FastAPI(title="Enviscale - Secure Analysis Engine", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "https://envisort.vercel.app"], # Replace with your final frontend URL
+    allow_origins=[FRONTEND_URL], # Replace with your final frontend URL
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 @app.get("/ping")
 async def ping():
-    return {"status": "ok", "message": "Envisort is alive"}
+    return {"status": "ok", "message": "Enviscale is alive"}
 # Initialize Jinja2 environment for PDF templates
 env = Environment(loader=FileSystemLoader("templates"), autoescape=select_autoescape(["html"]), enable_async=True)
 
@@ -240,12 +240,12 @@ async def request_password_reset(data: EmailSchema, db: Session = Depends(get_db
             
             # The actual API call to Resend
             resend.Emails.send({
-                "from": "onboarding@resend.dev",  # IMPORTANT: Use a verified domain you own
+                "from": "support@enviscale.com",  # IMPORTANT: Use a verified domain you own
                 "to": user.email,
-                "subject": "Your Envisort Password Reset Request",
+                "subject": "Your Enviscale Password Reset Request",
                 "html": f"""
                     <div style="font-family: Arial, sans-serif; line-height: 1.6;">
-                        <h2>Envisort Password Reset</h2>
+                        <h2>Enviscale Password Reset</h2>
                         <p>Hello,</p>
                         <p>We received a request to reset the password for your account. Please click the link below to set a new password. This link is only valid for 30 minutes.</p>
                         <p style="margin: 20px 0;">
@@ -254,7 +254,7 @@ async def request_password_reset(data: EmailSchema, db: Session = Depends(get_db
                             </a>
                         </p>
                         <p>If you did not request a password reset, please ignore this email or contact support if you have concerns.</p>
-                        <p>Thank you,<br>The Envisort Team</p>
+                        <p>Thank you,<br>The Enviscale Team</p>
                     </div>
                 """
             })
