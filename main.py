@@ -305,6 +305,23 @@ async def confirm_password_reset(data: PasswordResetRequest, db: Session = Depen
         
     return {"message": "Password has been updated successfully. Please log in."}    
 
+
+@app.get("/users/me", tags=["Users"])
+async def read_users_me(current_user: models.User = Depends(get_current_user)):
+    """
+    Returns the current logged-in user's details, including their access status.
+    """
+    has_active_access = False
+    if current_user.access_valid_until and current_user.access_valid_until > datetime.utcnow():
+        has_active_access = True
+    
+    return {
+        "email": current_user.email,
+        "has_active_access": has_active_access,
+        "access_valid_until": current_user.access_valid_until
+    }
+
+
 # ==================== PAYMENT ENDPOINTS ====================
 
 @app.post("/create-order/", tags=["Payment"])
