@@ -29,6 +29,7 @@ from contextlib import asynccontextmanager
 # --- Local Project Imports ---
 import models
 from database import SessionLocal, engine
+from supabase import create_client, Client
 
 # --- Initial Setup: Load Env & Create DB Tables ---
 load_dotenv()
@@ -42,8 +43,10 @@ RAZORPAY_SECRET_KEY = os.getenv("RAZORPAY_SECRET_KEY")
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
 FRONTEND_URL = os.getenv("FRONTEND_URL")
 RESEND_API_KEY=os.getenv("RESEND_API_KEY")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_SERVICE_KEY = os.getenv("SUPABASE_SERVICE_KEY")
 # Fail fast if critical security variables are missing
-if not all([GROQ_API_KEY, RAZORPAY_KEY_ID, RAZORPAY_SECRET_KEY, JWT_SECRET_KEY,FRONTEND_URL,RESEND_API_KEY]):
+if not all([GROQ_API_KEY, RAZORPAY_KEY_ID, RAZORPAY_SECRET_KEY, JWT_SECRET_KEY,FRONTEND_URL,RESEND_API_KEY,SUPABASE_URL, SUPABASE_SERVICE_KEY]):
     raise ValueError("FATAL ERROR: One or more required environment variables are not set.")
 
 os.environ["GROQ_API_KEY"] = GROQ_API_KEY
@@ -616,33 +619,73 @@ async def generate_summary(summary_data: Dict[str, Any], issue_category: str) ->
 
 # ==================== SECURED REPORT ENDPOINT ====================
 
+# --- Initialize Supabase Client ---
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+
+# ==================== SECURED REPORT ENDPOINT ====================
+
 @app.post("/generate-report-from-files/", tags=["Report Generation"])
 async def generate_report_from_files(
     company_name: str = Form(...),
     purchase_file: UploadFile = File(...),
     tds_file: UploadFile = File(...),
     gstr2b_file: UploadFile = File(...),
-    current_user: models.User = Depends(get_current_active_user)  # Now protected by the robust dependency
+    current_user: models.User = Depends(get_current_active_user)
 ):
     print(f"SECURITY CHECK PASSED: Report generation authorized for user: {current_user.email}")
     print(f"[{datetime.now()}] --- NEW REPORT REQUEST ---")
     
+    # 1. Create a unique ID for this audit run
+    audit_id = str(uuid.uuid4())
+    user_id_folder = f"user_{current_user.id}"
+    storage_path = f"{user_id_folder}/{audit_id}"
+    
+    # Define file names
+    purchase_filename = purchase_file.filename
+    tds_filename = tds_file.filename
+    gstr2b_filename = gstr2b_file.filename
+    report_filename = f"{company_name.replace(' ', '_')}_Enviscale_Report.pdf"
+
     try:
-        # --- 1. Process Files ---
-        print(f"[{datetime.now()}] STEP 1: Reading uploaded files...")
+        # --- STEP 0: UPLOAD USER FILES TO SUPABASE STORAGE ---
+        print(f"[{datetime.now()}] STEP 0: Uploading user files to Supabase Storage at path: {storage_path}")
+        
+        # Read file contents into memory
         p_content, t_content, g_content = await asyncio.gather(
             purchase_file.read(), 
             tds_file.read(), 
             gstr2b_file.read()
         )
         
-        # Read files into DataFrames
+        # Upload each file to Supabase Storage
+        try:
+            supabase.storage.from_("audit-artifacts").upload(
+                file=p_content, 
+                path=f"{storage_path}/{purchase_filename}"
+            )
+            supabase.storage.from_("audit-artifacts").upload(
+                file=t_content, 
+                path=f"{storage_path}/{tds_filename}"
+            )
+            supabase.storage.from_("audit-artifacts").upload(
+                file=g_content, 
+                path=f"{storage_path}/{gstr2b_filename}"
+            )
+            print(f"[{datetime.now()}] STEP 0 SUCCESS: User files uploaded to Supabase Storage.")
+        except Exception as storage_error:
+            print(f"[{datetime.now()}] STEP 0 WARNING: Failed to upload to Supabase Storage: {storage_error}")
+            # Continue with processing even if storage upload fails
+        
+        # --- STEP 1: PROCESS FILES ---
+        print(f"[{datetime.now()}] STEP 1: Reading uploaded files...")
+        
+        # Read files into DataFrames (reusing the in-memory content)
         p_df = pd.read_csv(io.BytesIO(p_content), dtype=str, keep_default_na=False) if purchase_file.filename.endswith('.csv') else pd.read_excel(io.BytesIO(p_content), engine='openpyxl', dtype=str, keep_default_na=False)
         t_df = pd.read_csv(io.BytesIO(t_content), dtype=str, keep_default_na=False) if tds_file.filename.endswith('.csv') else pd.read_excel(io.BytesIO(t_content), engine='openpyxl', dtype=str, keep_default_na=False)
         g_df = pd.read_csv(io.BytesIO(g_content), dtype=str, keep_default_na=False) if gstr2b_file.filename.endswith('.csv') else pd.read_excel(io.BytesIO(g_content), engine='openpyxl', dtype=str, keep_default_na=False)
         print(f"[{datetime.now()}] STEP 1 SUCCESS: Files read into DataFrames.")
 
-        # --- 2. AI-Powered Column Mapping ---
+        # --- STEP 2: AI-POWERED COLUMN MAPPING ---
         print(f"[{datetime.now()}] STEP 2: Starting AI column mapping (this may take a moment)...")
         mapped_purchase_df, mapped_tds_df, mapped_gstr2b_df = await asyncio.gather(
             extract_semantic_fields(p_df, "purchase"),
@@ -651,14 +694,14 @@ async def generate_report_from_files(
         )
         print(f"[{datetime.now()}] STEP 2 SUCCESS: AI mapping complete.")
 
-        # --- 3. Core Data Analysis ---
+        # --- STEP 3: CORE DATA ANALYSIS ---
         print(f"[{datetime.now()}] STEP 3: Starting core data analysis...")
         vendor_findings = analyze_vendor_data(mapped_purchase_df)
         tds_findings = analyze_tds_data(mapped_tds_df)
         gst_findings = analyze_gst_data(mapped_purchase_df, mapped_gstr2b_df)
         print(f"[{datetime.now()}] STEP 3 SUCCESS: Core analysis complete.")
         
-        # --- 4. Calculation & AI Summarization ---
+        # --- STEP 4: CALCULATION & AI SUMMARIZATION ---
         print(f"[{datetime.now()}] STEP 4: Calculating totals...")
         vendor_summary_data = calculate_vendor_totals(vendor_findings)
         tds_summary_data = calculate_tds_totals(tds_findings)
@@ -672,7 +715,7 @@ async def generate_report_from_files(
         )
         print(f"[{datetime.now()}] STEP 4b SUCCESS: AI summaries generated.")
         
-        # --- 5. Render PDF Report ---
+        # --- STEP 5: RENDER PDF REPORT ---
         print(f"[{datetime.now()}] STEP 5: Rendering final PDF report...")
         try:
             template = env.get_template("report_template.html")
@@ -692,12 +735,27 @@ async def generate_report_from_files(
         )
         
         pdf_bytes = HTML(string=html_out).write_pdf()
-        print(f"[{datetime.now()}] STEP 5 SUCCESS: PDF rendered. Sending response.")
+        print(f"[{datetime.now()}] STEP 5 SUCCESS: PDF rendered.")
+        
+        # --- STEP 6: UPLOAD GENERATED REPORT TO SUPABASE ---
+        print(f"[{datetime.now()}] STEP 6: Uploading generated PDF report to Supabase Storage...")
+        try:
+            supabase.storage.from_("audit-artifacts").upload(
+                file=pdf_bytes, 
+                path=f"{storage_path}/{report_filename}"
+            )
+            print(f"[{datetime.now()}] STEP 6 SUCCESS: Report PDF uploaded to Supabase Storage.")
+        except Exception as storage_error:
+            print(f"[{datetime.now()}] STEP 6 WARNING: Failed to upload report to Supabase Storage: {storage_error}")
+            # Continue with response even if storage upload fails
+        
+        # --- STEP 7: RETURN REPORT TO USER ---
+        print(f"[{datetime.now()}] STEP 7: Sending PDF response to user.")
         
         return StreamingResponse(
             io.BytesIO(pdf_bytes),
             media_type="application/pdf",
-            headers={"Content-Disposition": f'attachment; filename="{company_name}_Audit_Report.pdf"'}
+            headers={"Content-Disposition": f'attachment; filename="{report_filename}"'}
         )
 
     except Exception as e:
