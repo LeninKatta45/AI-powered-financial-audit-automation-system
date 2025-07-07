@@ -645,10 +645,29 @@ async def generate_report_from_files(
     tds_filename = tds_file.filename
     gstr2b_filename = gstr2b_file.filename
     report_filename = f"{company_name.replace(' ', '_')}_Enviscale_Report.pdf"
+    metadata_filename = "metadata.json"
 
     try:
-        # --- STEP 0: UPLOAD USER FILES TO SUPABASE STORAGE ---
-        print(f"[{datetime.now()}] STEP 0: Uploading user files to Supabase Storage at path: {storage_path}")
+        # ===== STEP 0a: Create Metadata =====
+        print(f"[{datetime.now()}] STEP 0a: Creating metadata...")
+        upload_timestamp = datetime.utcnow().isoformat()
+        metadata = {
+            "user_id": current_user.id,
+            "user_email": current_user.email,
+            "company_name_submitted": company_name,
+            "upload_timestamp_utc": upload_timestamp,
+            "audit_id": audit_id,
+            "original_filenames": {
+                "purchase": purchase_filename,
+                "tds": tds_filename,
+                "gstr2b": gstr2b_filename,
+            }
+        }
+        metadata_bytes = json.dumps(metadata, indent=2).encode('utf-8')
+        print(f"[{datetime.now()}] STEP 0a SUCCESS: Metadata created.")
+        
+        # --- STEP 0b: UPLOAD USER FILES TO SUPABASE STORAGE ---
+        print(f"[{datetime.now()}] STEP 0b: Uploading user files to Supabase Storage at path: {storage_path}")
         
         # Read file contents into memory
         p_content, t_content, g_content = await asyncio.gather(
@@ -659,6 +678,13 @@ async def generate_report_from_files(
         
         # Upload each file to Supabase Storage
         try:
+            # Upload metadata file
+            supabase.storage.from_("audit-artifacts").upload(
+                file=metadata_bytes, 
+                path=f"{storage_path}/{metadata_filename}"
+            )
+            
+            # Upload user files
             supabase.storage.from_("audit-artifacts").upload(
                 file=p_content, 
                 path=f"{storage_path}/{purchase_filename}"
@@ -671,9 +697,9 @@ async def generate_report_from_files(
                 file=g_content, 
                 path=f"{storage_path}/{gstr2b_filename}"
             )
-            print(f"[{datetime.now()}] STEP 0 SUCCESS: User files uploaded to Supabase Storage.")
+            print(f"[{datetime.now()}] STEP 0b SUCCESS: User files and metadata uploaded to Supabase Storage.")
         except Exception as storage_error:
-            print(f"[{datetime.now()}] STEP 0 WARNING: Failed to upload to Supabase Storage: {storage_error}")
+            print(f"[{datetime.now()}] STEP 0b WARNING: Failed to upload to Supabase Storage: {storage_error}")
             # Continue with processing even if storage upload fails
         
         # --- STEP 1: PROCESS FILES ---
