@@ -190,9 +190,13 @@ async def signup(user_data: UserCreate, db: Session = Depends(get_db)):
         db.refresh(new_user)
         print(f"[Signup] STEP 4 SUCCESS: User {new_user.email} committed to database with ID {new_user.id}.")
         
+        # Step 5: Create access token
+        print("[Signup] STEP 5: Creating access token...")
+        access_token = create_access_token(data={"sub": new_user.email}, expires_delta=timedelta(days=1))
+        print("[Signup] STEP 5 SUCCESS: Access token created.")
         
         print("--- SIGNUP PROCESS COMPLETED SUCCESSFULLY ---")
-        return {"message": "Account created successfully. Please log in to proceed to payment."}
+        return {"accessToken": access_token, "email": new_user.email}
 
     except Exception as e:
         # This will catch any unexpected crash and report it
@@ -364,9 +368,7 @@ async def verify_payment(data: PaymentVerificationData, db: Session = Depends(ge
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Payment verification failed: {e}")
 
-        # NEW: Issue an access token upon successful payment to log the user in.
-    access_token = create_access_token(data={"sub": user.email}, expires_delta=timedelta(days=1))
-    return {"status": "success", "accessToken": access_token}
+    return {"status": "success", "message": "Payment successful. Access granted."}
 
 
 # ==================== DATA ANALYSIS FUNCTIONS ====================
