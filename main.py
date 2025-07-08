@@ -74,6 +74,12 @@ async def lifespan(app: FastAPI):
     print("Application shutdown.")
 
 app = FastAPI(title="Enviscale - Secure Analysis Engine", lifespan=lifespan)
+# ===== ADD THIS NEW HEALTH CHECK ENDPOINT =====
+@app.get("/health", status_code=200, tags=["Health"])
+async def health_check():
+    """A simple endpoint for Render's health check."""
+    return {"status": "ok"}
+# ===============================
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[FRONTEND_URL], # Replace with your final frontend URL
