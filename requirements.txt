@@ -49,6 +49,11 @@ bcrypt==3.2.2
 
 supabase
 
+xlsxwriter
+
+
+alembic
+
 
 
 
