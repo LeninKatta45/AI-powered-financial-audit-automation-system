@@ -338,7 +338,7 @@ async def read_users_me(current_user: models.User = Depends(get_current_user)):
 async def create_order(current_user: models.User = Depends(get_current_user)):
     """Creates a Razorpay order for the currently logged-in user."""
     order_data = {
-        "amount": 100,
+        "amount": 1180000,
         "currency": "INR",
         "receipt": f"rcpt_{uuid.uuid4().hex}",
         "notes": {"user_id": current_user.id} # Link order to user ID for robust tracking
