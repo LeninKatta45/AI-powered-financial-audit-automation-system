@@ -1,0 +1,52 @@
+# .github/workflows/send_reminders.yml
+
+# Name of the workflow as it will appear in the "Actions" tab on GitHub
+name: Send Monthly Reminder Emails
+
+# This 'on' section defines when the workflow will run
+on:
+  # This allows you to run the workflow manually from the GitHub Actions tab
+  workflow_dispatch:
+
+  # This is the cron job trigger. It runs the workflow on a schedule.
+  schedule:
+    # This is a CRON expression that means "run at 05:30 UTC every day".
+    # 05:30 UTC is 11:00 AM IST. You can adjust this time.
+    # To learn more about cron syntax, visit: https://crontab.guru
+    - cron: '30 5 * * *'
+
+# 'jobs' are the sequence of tasks to be executed
+jobs:
+  # We define a single job called 'run-scheduler'
+  run-scheduler:
+    # The type of machine to run the job on. 'ubuntu-latest' is standard and free.
+    runs-on: ubuntu-latest
+
+    # 'steps' are the individual commands within the job
+    steps:
+      # Step 1: Check out your repository's code so the runner has access to it
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      # Step 2: Set up a Python environment
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11' # Match the Python version you use
+
+      # Step 3: Install all the necessary packages from your requirements.txt
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Step 4: Run your scheduler script
+      # This is the most important step. It executes your Python script.
+      # The 'env' block securely injects your GitHub Secrets as environment variables
+      # so your script can access them with os.getenv()
+      - name: Run the scheduler script
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          FRONTEND_URL: ${{ secrets.FRONTEND_URL }}
+        run: python scheduler.py
