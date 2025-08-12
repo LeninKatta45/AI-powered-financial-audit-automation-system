@@ -1,4 +1,4 @@
-# AI Audit Copilot (Enviscale)
+# AI Audit Copilot
 
 **AI Audit Copilot** is an enterprise-grade **AI-powered financial audit automation platform**.  
 It ingests financial transaction data from multiple sources, reconciles them, and **uncovers hidden errors** in minutes — replacing hours of manual work by finance teams.
@@ -55,4 +55,21 @@ Built with **FastAPI**, **Razorpay payments**, **LLM-powered analysis**, and **a
 
 ---
 
-## 📂 Project Structure
+## 📄 Example Use Case
+Scenario: A mid-sized company uploads:
+
+Purchase register (Excel)
+
+GSTR-2B filing report (Excel)
+
+Vendor payment ledger (CSV)
+
+AI Audit Copilot:
+
+Reconciles purchase vs GSTR data → finds GST mismatches
+
+Checks TDS calculations → finds underpaid TDS on two vendors
+
+Flags duplicate vendor payments worth ₹1.2L
+
+Generates PDF report + email delivery
