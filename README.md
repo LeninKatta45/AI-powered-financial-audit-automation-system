@@ -1,6 +1,13 @@
 # AI Audit Copilot
 
-**AI Audit Copilot** is an enterprise-grade **AI-powered financial audit automation platform**.  
+**AI-powered financial audit automation that detects errors, saves time, and reduces compliance risks**
+
+[![FastAPI](https://img.shields.io/badge/FastAPI-005571?style=for-the-badge&logo=fastapi)](https://fastapi.tiangolo.com/)
+[![Python](https://img.shields.io/badge/Python-3.11%2B-blue?style=for-the-badge&logo=python)](https://www.python.org/)
+[![Docker](https://img.shields.io/badge/Docker-2CA5E0?style=for-the-badge&logo=docker&logoColor=white)](https://www.docker.com/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-316192?style=for-the-badge&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](https://opensource.org/licenses/MIT)
+
 It ingests financial transaction data from multiple sources, reconciles them, and **uncovers hidden errors** in minutes — replacing hours of manual work by finance teams.
 
 Built with **FastAPI**, **Razorpay payments**, **LLM-powered analysis**, and **automated PDF reporting**.
