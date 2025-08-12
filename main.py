@@ -1,15 +1,18 @@
-# main.py - FINAL ARCHITECTURE with Sign-up, Login, and Payment Flow
-# main.py - FINAL ARCHITECTURE with Sign-up, Login, and Payment Flow
+# main.py - FINAL ARCHITECTURE with Sign-up, Login, and Payment Flow (DATA ENRICHMENT UPDATE)
 
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
 import json
 import asyncio
-from typing import List, Dict, Any,Optional
+import numpy as np
+from typing import List, Dict, Any, Optional, Union
 import pandas as pd
+from sqlalchemy import func 
 import io
 import resend
+import re
+
 # --- Dependencies ---
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Depends
 from fastapi.responses import StreamingResponse
@@ -168,49 +171,18 @@ async def get_current_active_user(current_user: models.User = Depends(get_curren
 @app.post("/signup", tags=["Authentication"])
 async def signup(user_data: UserCreate, db: Session = Depends(get_db)):
     """Registers a new user."""
-    print(f"\n--- SIGNUP REQUEST RECEIVED for {user_data.email} ---")
+    db_user = db.query(models.User).filter(models.User.email == user_data.email).first()
+    if db_user:
+        raise HTTPException(status_code=400, detail="An account with this email already exists.")
     
-    try:
-        # Step 1: Check if user exists
-        print("[Signup] STEP 1: Checking database for existing user...")
-        db_user = db.query(models.User).filter(models.User.email == user_data.email).first()
-        print("[Signup] STEP 1 SUCCESS: Database check complete.")
-        
-        if db_user:
-            print(f"[Signup] ERROR: User {user_data.email} already exists.")
-            raise HTTPException(status_code=400, detail="An account with this email already exists.")
-        
-        # Step 2: Hash the password
-        print("[Signup] STEP 2: Hashing password...")
-        hashed_password = get_password_hash(user_data.password)
-        print("[Signup] STEP 2 SUCCESS: Password hashed.")
-        
-        # Step 3: Create the new user object
-        print("[Signup] STEP 3: Creating new user object in memory...")
-        new_user = models.User(email=user_data.email, hashed_password=hashed_password)
-        print("[Signup] STEP 3 SUCCESS: User object created.")
-        
-        # Step 4: Add to database session and commit
-        print("[Signup] STEP 4: Adding user to DB session and committing...")
-        db.add(new_user)
-        db.commit()
-        db.refresh(new_user)
-        print(f"[Signup] STEP 4 SUCCESS: User {new_user.email} committed to database with ID {new_user.id}.")
-        
-        # Step 5: Create access token
-        print("[Signup] STEP 5: Creating access token...")
-        access_token = create_access_token(data={"sub": new_user.email}, expires_delta=timedelta(days=1))
-        print("[Signup] STEP 5 SUCCESS: Access token created.")
-        
-        print("--- SIGNUP PROCESS COMPLETED SUCCESSFULLY ---")
-        return {"accessToken": access_token, "email": new_user.email}
-
-    except Exception as e:
-        # This will catch any unexpected crash and report it
-        print(f"!!! CRITICAL ERROR DURING SIGNUP: {e}")
-        # Rollback the transaction if something failed, especially after adding to session
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"An internal server error occurred during signup: {str(e)}")
+    hashed_password = get_password_hash(user_data.password)
+    new_user = models.User(email=user_data.email, hashed_password=hashed_password)
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    
+    access_token = create_access_token(data={"sub": new_user.email}, expires_delta=timedelta(days=1))
+    return {"accessToken": access_token, "email": new_user.email}
 
 @app.post("/login", tags=["Authentication"])
 async def login(form_data: UserLogin, db: Session = Depends(get_db)):
@@ -226,64 +198,25 @@ async def login(form_data: UserLogin, db: Session = Depends(get_db)):
 @app.post("/request-password-reset", tags=["Authentication"])
 async def request_password_reset(data: EmailSchema, db: Session = Depends(get_db)):
     """If a user exists, sends them a password reset link."""
-    print(f"\n--- PASSWORD RESET REQUEST for {data.email} ---")
-    
     user = db.query(models.User).filter(models.User.email == data.email).first()
-    
-    # This conditional block is the core logic.
-    # It ensures we only attempt to send an email if a user actually exists.
     if user:
-        print(f"SUCCESS: Found user in DB with ID: {user.id}")
-        
-        # Create a short-lived token specifically for password reset
         reset_token = create_access_token(
             data={"sub": user.email, "purpose": "password_reset"}, 
             expires_delta=timedelta(minutes=30)
         )
-        
-        # Construct the full link using your environment variable
         reset_link = f"{FRONTEND_URL}/reset-password?token={reset_token}"
-        
-        # ===== THIS IS THE REAL EMAIL SENDING LOGIC =====
         try:
-            print(f"Attempting to send password reset email to {user.email}...")
-            
-            # The actual API call to Resend
             resend.Emails.send({
-                "from": "support@enviscale.com",  # IMPORTANT: Use a verified domain you own
+                "from": "support@enviscale.com",
                 "to": user.email,
                 "subject": "Your Enviscale Password Reset Request",
                 "html": f"""
-                    <div style="font-family: Arial, sans-serif; line-height: 1.6;">
-                        <h2>Enviscale Password Reset</h2>
-                        <p>Hello,</p>
-                        <p>We received a request to reset the password for your account. Please click the link below to set a new password. This link is only valid for 30 minutes.</p>
-                        <p style="margin: 20px 0;">
-                            <a href="{reset_link}" style="display: inline-block; padding: 12px 24px; background-color: #2563EB; color: white; text-decoration: none; border-radius: 8px;">
-                                Reset Your Password
-                            </a>
-                        </p>
-                        <p>If you did not request a password reset, please ignore this email or contact support if you have concerns.</p>
-                        <p>Thank you,<br>The Enviscale Team</p>
-                    </div>
+                    <p>Click the link to reset your password: <a href="{reset_link}">Reset Password</a></p>
+                    <p>This link is valid for 30 minutes.</p>
                 """
             })
-            
-            print(f"SUCCESS: Password reset email sent to {user.email}.")
-            
         except Exception as e:
-            # If email sending fails, log the error but do not expose it to the user.
-            # This prevents revealing whether an email address is registered or not.
             print(f"!!! CRITICAL ERROR: Could not send password reset email: {e}")
-            # Do not raise an HTTPException here for security reasons.
-        # ===============================================
-            
-    else:
-        # If no user was found, we just print a log for our own debugging.
-        # We do NOT tell the frontend that the user doesn't exist.
-        print(f"INFO: No user found for email: {data.email}. No email will be sent.")
-
-    # Always return the same generic message to prevent email enumeration attacks.
     return {"message": "If an account exists for this email, a password reset link has been sent."}
 
 
@@ -293,11 +226,8 @@ async def confirm_password_reset(data: PasswordResetRequest, db: Session = Depen
     credentials_exception = HTTPException(status_code=400, detail="Invalid or expired reset token.")
     try:
         payload = jwt.decode(data.token, JWT_SECRET_KEY, algorithms=[JWT_ALGORITHM])
-        
-        # Check that the token was specifically for a password reset
         if payload.get("purpose") != "password_reset":
             raise credentials_exception
-            
         email: str = payload.get("sub")
         if email is None:
             raise credentials_exception
@@ -306,10 +236,8 @@ async def confirm_password_reset(data: PasswordResetRequest, db: Session = Depen
         if user is None:
             raise credentials_exception
 
-        # Update the password
         user.hashed_password = get_password_hash(data.new_password)
         db.commit()
-
     except JWTError:
         raise credentials_exception
         
@@ -318,19 +246,13 @@ async def confirm_password_reset(data: PasswordResetRequest, db: Session = Depen
 
 @app.get("/users/me", tags=["Users"])
 async def read_users_me(current_user: models.User = Depends(get_current_user)):
-    """
-    Returns the current logged-in user's details, including their access status.
-    """
-    has_active_access = False
-    if current_user.access_valid_until and current_user.access_valid_until > datetime.now(timezone.utc):
-        has_active_access = True
-    
+    """Returns the current logged-in user's details."""
+    has_active_access = current_user.access_valid_until and current_user.access_valid_until > datetime.now(timezone.utc)
     return {
         "email": current_user.email,
         "has_active_access": has_active_access,
         "access_valid_until": current_user.access_valid_until
     }
-
 
 # ==================== PAYMENT ENDPOINTS ====================
 
@@ -338,17 +260,14 @@ async def read_users_me(current_user: models.User = Depends(get_current_user)):
 async def create_order(current_user: models.User = Depends(get_current_user)):
     """Creates a Razorpay order for the currently logged-in user."""
     order_data = {
-        "amount": 1180000,
-        "currency": "INR",
-        "receipt": f"rcpt_{uuid.uuid4().hex}",
-        "notes": {"user_id": current_user.id} # Link order to user ID for robust tracking
+        "amount": 1180000, "currency": "INR", "receipt": f"rcpt_{uuid.uuid4().hex}",
+        "notes": {"user_id": current_user.id}
     }
     try:
         order = razorpay_client.order.create(data=order_data)
         return {"orderId": order["id"], "keyId": RAZORPAY_KEY_ID, "amount": order_data["amount"]}
     except Exception as e:
-        print(f"!!! RAZORPAY API ERROR: {e}")
-        raise HTTPException(status_code=500, detail=f"An error occurred with the payment provider.")
+        raise HTTPException(status_code=500, detail="An error occurred with the payment provider.")
 
 
 @app.post("/verify-payment/", tags=["Payment"])
@@ -356,119 +275,269 @@ async def verify_payment(data: PaymentVerificationData, db: Session = Depends(ge
     """Verifies payment and grants access in the DB."""
     try:
         razorpay_client.utility.verify_payment_signature(data.dict())
-        
         order = razorpay_client.order.fetch(data.razorpay_order_id)
         user_id = order['notes'].get('user_id')
         if not user_id:
             raise HTTPException(status_code=400, detail="User ID not found in order notes.")
-
         user = db.query(models.User).filter(models.User.id == user_id).first()
         if not user:
             raise HTTPException(status_code=404, detail=f"User with ID {user_id} not found.")
-
-        # Grant access for 1 year (as an example for a full subscription)
+        
         user.access_valid_until = datetime.now(timezone.utc) + timedelta(days=365)
         user.last_payment_id = data.razorpay_payment_id
         db.commit()
-        print(f"Access granted for user {user.email} until {user.access_valid_until}")
-
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Payment verification failed: {e}")
-
     return {"status": "success", "message": "Payment successful. Access granted."}
 
-
-# ==================== DATA ANALYSIS FUNCTIONS ====================
+# ==================== DATA ANALYSIS & MAPPING (OPTIMIZED) ====================
 
 FIELD_DESCRIPTION_MAP = {
-    # Purchase Register Fields
-    "Invoice_Date": "Date when the invoice was issued",
-    "Invoice_Number": "Unique number of the invoice",
-    "Vendor_Name": "Name of the vendor",
-    "Vendor_GSTIN": "GSTIN of the vendor",
-    "Taxable_Value": "Taxable value in the invoice",
-    "Total_Invoice_Value": "Total value including tax",
-    "Has_PO": "Whether a PO (purchase order) is attached",
-    
-    # TDS Ledger Fields
-    "Payment_Date": "Date when the payment was made",
-    "Amount_Paid": "Amount paid to the vendor",
-    "TDS_Section": "Section under which TDS was deducted",
-    "TDS_Deducted": "Amount of TDS deducted",
-
-    # GSTR-2B Fields (some overlap with Purchase)
-    # Re-using existing descriptions for Invoice_Number, Vendor_GSTIN, etc.
-
-    # --- NEW FIELDS FOR NEW FILES ---
-    # GSTR-3B Fields
-    "Return_Period": "The month/quarter for the GSTR-3B filing (e.g., 'Apr-2024')",
-    "ITC_Available": "Total Input Tax Credit available as per books or 2B",
-    "ITC_Claimed": "Input Tax Credit actually claimed in the GSTR-3B return for that period",
-    "Tax_Paid_Cash": "GST liability paid through cash ledger",
-
-    # Vendor Master Fields
-    "Vendor_Code": "Internal unique code for the vendor",
-    "Vendor_PAN": "Permanent Account Number (PAN) of the vendor",
-    "Vendor_Address": "Registered address of the vendor",
-    "Vendor_Bank_Account": "Bank account number of the vendor",
-
-    # Sales Register Fields
-    "Customer_Name": "Name of the customer who was billed",
-    "Sales_Invoice_Value": "Total value of the sales invoice"
+    "Invoice_Date": "Date of invoice", "Invoice_Number": "Unique invoice ID",
+    "Vendor_Name": "Supplier name", "Vendor_GSTIN": "Supplier GSTIN",
+    "Taxable_Value": "Value before tax", "Total_Invoice_Value": "Value including tax",
+    "Has_PO": "Purchase Order exists (Y/N)", "Payment_Date": "Date of payment",
+    "Amount_Paid": "Gross amount paid", "TDS_Section": "TDS tax section",
+    "TDS_Deducted": "TDS amount deducted", "Return_Period": "GST return month/quarter",
+    "ITC_Available": "Input Tax Credit available", "ITC_Claimed": "Input Tax Credit claimed",
+    "Tax_Paid_Cash": "GST paid in cash", "Vendor_Code": "Internal vendor ID",
+    "Vendor_PAN": "Vendor PAN ID", "Vendor_Address": "Supplier address",
+    "Vendor_Bank_Account": "Supplier bank account", "Customer_Name": "Billed customer",
+    "Sales_Invoice_Value": "Total sales invoice value"
 }
 
+# --- UNIFIED & OPTIMIZED MAPPING LOGIC ---
 
-@retry(stop=stop_after_attempt(3), wait=wait_random_exponential(min=1, max=4))
-async def extract_mapping_llm(columns: list, doc_type: str) -> dict:
-    """
-    Uses an LLM to map messy column headers to a standard, predefined schema
-    based on the document type.
-    """
-    prompt = f"You are a data analyst mapping messy Excel headers to standard fields for {doc_type} documents.\nStandard fields and their purposes:\n"
+async def read_uploaded_file(file: UploadFile) -> pd.DataFrame:
+    content = await file.read()
+    if file.filename.endswith('.csv'):
+        df = pd.read_csv(io.BytesIO(content), keep_default_na=False)
+    else:
+        df = pd.read_excel(io.BytesIO(content), engine='openpyxl', keep_default_na=False)
+    return df.astype(str)
+
+def is_valid_upload_file(file) -> bool:
+    return file and hasattr(file, 'filename') and file.filename
+
+def safe_numeric_conversion(df: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
+    df_copy = df.copy()
+    for col in columns:
+        if col in df_copy.columns:
+            s = df_copy[col].astype(str).str.replace(',', '').str.extract(r'(-?\d+\.?\d*)').iloc[:, 0]
+            df_copy[col] = pd.to_numeric(s, errors='coerce').fillna(0)
+    return df_copy
+
+@retry(stop=stop_after_attempt(3), wait=wait_random_exponential(min=1, max=6))
+async def get_unified_mapping_llm(columns: list, doc_type: str, sample_data: pd.DataFrame) -> dict:
+    """A single, unified LLM call to get both direct mappings and formula suggestions."""
+    doc_type_fields = {
+        "purchase": ["Invoice_Date", "Invoice_Number", "Vendor_Name", "Vendor_GSTIN", "Taxable_Value", "Total_Invoice_Value", "Has_PO"],
+        "tds": ["Payment_Date", "Vendor_Name", "Amount_Paid", "TDS_Section", "TDS_Deducted"],
+        "gstr2b": ["Invoice_Date", "Invoice_Number", "Vendor_GSTIN", "Total_Invoice_Value", "Vendor_Name"],
+        "gstr3b": ["Return_Period", "ITC_Available", "ITC_Claimed", "Tax_Paid_Cash"],
+        "vendor_master": ["Vendor_Code", "Vendor_Name", "Vendor_GSTIN", "Vendor_PAN", "Vendor_Address", "Vendor_Bank_Account"],
+        "sales_register": ["Invoice_Date", "Invoice_Number", "Customer_Name", "Sales_Invoice_Value"]
+    }
+    required_fields = doc_type_fields.get(doc_type, [])
     
-    relevant_fields = []
-    # Define the required fields for each document type
-    if doc_type == "purchase":
-        relevant_fields = ["Invoice_Date", "Invoice_Number", "Vendor_Name", "Vendor_GSTIN", "Taxable_Value", "Total_Invoice_Value", "Has_PO"]
-    elif doc_type == "tds":
-        relevant_fields = ["Payment_Date", "Vendor_Name", "Amount_Paid", "TDS_Section", "TDS_Deducted"]
-    elif doc_type == "gstr2b":
-        # Note: GSTR2B often shares fields with Purchase Register
-        relevant_fields = ["Invoice_Date", "Invoice_Number", "Vendor_GSTIN", "Total_Invoice_Value", "Vendor_Name"]
-    elif doc_type == "gstr3b":
-        relevant_fields = ["Return_Period", "ITC_Available", "ITC_Claimed", "Tax_Paid_Cash"]
-    elif doc_type == "vendor_master":
-        relevant_fields = ["Vendor_Code", "Vendor_Name", "Vendor_GSTIN", "Vendor_PAN", "Vendor_Address", "Vendor_Bank_Account"]
-    elif doc_type == "sales_register":
-        relevant_fields = ["Invoice_Date", "Invoice_Number", "Customer_Name", "Sales_Invoice_Value"]
-    
-    # Build the prompt with field descriptions
-    for field in relevant_fields:
-        prompt += f"- {field}: {FIELD_DESCRIPTION_MAP.get(field, 'No description')}\n"
-    
-    prompt += f"\nHere are the actual, messy column names from the uploaded file that need mapping:\n" + "\n".join([f"- {col}" for col in columns])
-    prompt += "\n\nYour task is to return ONLY a JSON dictionary that maps the standard fields (the keys) to the most likely column name from the uploaded file (the values). If you cannot find a confident match for a standard field, OMIT it entirely from the final JSON. Do not guess."
-    
+    field_descriptions = "\n".join([f"- {field}: {FIELD_DESCRIPTION_MAP[field]}" for field in required_fields])
+
+    prompt = f"""You are an expert data analyst for Indian accounting. Your task is to map columns from an uploaded file to a standard schema and suggest formulas for missing fields.
+
+Document Type: {doc_type}
+
+Standard Fields Required:
+{field_descriptions}
+
+Available Columns from User's File:
+{json.dumps(columns)}
+
+Sample Data (first 2 rows):
+{sample_data.head(2).to_json(orient='records')}
+
+INSTRUCTIONS:
+1.  **Direct Mapping:** First, find the best direct match for each standard field from the available columns.
+2.  **Formula Generation:** If a numeric standard field (like 'Total_Invoice_Value') cannot be directly mapped, suggest a formula to calculate it from other available columns (e.g., adding 'Taxable_Value' and tax columns). For 'Taxable_Value', if a column like 'Amount' exists, map to it.
+3.  **Confidence:** Assign a 'high' or 'low' confidence to each mapping and formula. Be conservative. 'high' means you are very sure.
+
+Return ONLY a JSON object with the following structure:
+{{
+  "direct_mappings": {{
+    "Standard_Field_Name": "Actual_Column_Name"
+  }},
+  "formulas": {{
+    "Standard_Field_Name_To_Calculate": {{
+      "columns_to_add": ["col1", "col2"],
+      "columns_to_subtract": ["discount_col"]
+    }}
+  }},
+  "confidence": {{
+    "Standard_Field_Name": "high|low"
+  }}
+}}
+"""
     try:
         response = await acompletion(
             model="groq/llama3-70b-8192",
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"},
-            max_tokens=500  # Increased slightly for potentially larger schemas
+            max_tokens=1000
         )
         return json.loads(response.choices[0].message.content)
-    except (json.JSONDecodeError, IndexError, Exception) as e:
-        print(f"LLM mapping failed for doc_type '{doc_type}': {e}")
+    except Exception as e:
+        print(f"Unified mapping LLM call failed for doc_type '{doc_type}': {e}")
         return {}
 
-async def extract_semantic_fields(df: pd.DataFrame, doc_type: str) -> pd.DataFrame:
-    if df.empty:
+
+def calculate_field_from_formula(df: pd.DataFrame, field_name: str, formula_info: dict) -> pd.DataFrame:
+    try:
+        add_cols = [col for col in formula_info.get("columns_to_add", []) if col in df.columns]
+        sub_cols = [col for col in formula_info.get("columns_to_subtract", []) if col in df.columns]
+
+        if not add_cols: return df
+
+        calc_df = df.copy()
+        all_calc_cols = add_cols + sub_cols
+        calc_df = safe_numeric_conversion(calc_df, all_calc_cols)
+
+        total_add = calc_df[add_cols].sum(axis=1) if add_cols else 0
+        total_sub = calc_df[sub_cols].sum(axis=1) if sub_cols else 0
+        
+        df[field_name] = (total_add - total_sub).clip(lower=0)
         return df
-    mapping = await extract_mapping_llm(list(df.columns), doc_type)
-    reverse_mapping = {v: k for k, v in mapping.items() if v in df.columns}
-    return df.rename(columns=reverse_mapping)
+    except Exception as e:
+        print(f"Warning: Could not calculate {field_name} from formula. Error: {e}")
+        return df
 
 
+async def map_uploaded_file_to_df(file: Optional[UploadFile], doc_type: str) -> pd.DataFrame:
+    if not is_valid_upload_file(file):
+        return pd.DataFrame()
+
+    try:
+        df = await read_uploaded_file(file)
+        if df.empty: return pd.DataFrame()
+
+        llm_result = await get_unified_mapping_llm(list(df.columns), doc_type, df)
+        
+        print(f"\n--- MAPPING LOGS FOR: {doc_type.upper()} ---")
+        confidence = llm_result.get("confidence", {})
+        
+        direct_mappings = llm_result.get("direct_mappings", {})
+        print("Direct Mapping Analysis:")
+        if not direct_mappings: print("  No direct mappings suggested.")
+        else:
+            for std_field, orig_col in direct_mappings.items():
+                conf = confidence.get(std_field, 'low')
+                status = "✅ Applied" if conf == 'high' and orig_col in df.columns else "❌ Rejected"
+                reason = "low confidence" if conf != 'high' else "" if orig_col in df.columns else "column not found"
+                print(f"  - '{std_field}' -> '{orig_col}' (Confidence: {conf}) - {status} {reason}")
+
+        formulas = llm_result.get("formulas", {})
+        print("\nFormula Analysis:")
+        if not formulas: print("  No formulas suggested.")
+        else:
+            for std_field, formula_info in formulas.items():
+                conf = confidence.get(std_field, 'low')
+                status = "✅ Applied" if conf == 'high' else "❌ Rejected (low confidence)"
+                formula_str = f"ADD({formula_info.get('columns_to_add', [])}) - SUBTRACT({formula_info.get('columns_to_subtract', [])})"
+                print(f"  - '{std_field}' -> Formula: {formula_str} (Confidence: {conf}) - {status}")
+
+        final_direct_mappings = {std_field: orig_col for std_field, orig_col in direct_mappings.items() if confidence.get(std_field) == 'high' and orig_col in df.columns}
+        reverse_mapping = {v: k for k, v in final_direct_mappings.items()}
+        mapped_df = df.rename(columns=reverse_mapping)
+        
+        final_formulas = {std_field: formula for std_field, formula in formulas.items() if confidence.get(std_field) == 'high'}
+        for field_name, formula_info in final_formulas.items():
+            if field_name not in mapped_df.columns:
+                mapped_df = calculate_field_from_formula(mapped_df, field_name, formula_info)
+
+        all_mapped_fields = list(final_direct_mappings.keys()) + list(final_formulas.keys())
+        final_columns = [col for col in all_mapped_fields if col in mapped_df.columns]
+        
+        print(f"\nFINAL MAPPED COLUMNS for {doc_type.upper()}: {final_columns}\n--------------------------------------------------")
+        
+        return mapped_df[final_columns]
+
+    except Exception as e:
+        print(f"ERROR: Unhandled exception during file processing for '{doc_type}'. Error: {e}")
+        return pd.DataFrame()
+
+
+# ==================== DATA ENRICHMENT & ANALYSIS (ROBUST) ====================
+def enrich_gstr2b_data(gstr2b_df: pd.DataFrame, purchase_df: pd.DataFrame) -> pd.DataFrame:
+    """Adds Vendor_Name to GSTR-2B data by looking it up from the Purchase Register."""
+    if gstr2b_df.empty or purchase_df.empty:
+        return gstr2b_df
+    
+    # Check if required columns exist for the operation
+    if 'Vendor_Name' in gstr2b_df.columns and not gstr2b_df['Vendor_Name'].isnull().all():
+        print("GSTR-2B already contains Vendor_Name. No enrichment needed.")
+        return gstr2b_df
+        
+    if 'Vendor_GSTIN' not in gstr2b_df.columns or 'Vendor_GSTIN' not in purchase_df.columns or 'Vendor_Name' not in purchase_df.columns:
+        print("Warning: Cannot enrich GSTR-2B data. Missing required GSTIN or Name columns.")
+        return gstr2b_df
+
+    print("Attempting to enrich GSTR-2B with Vendor_Name from Purchase Register...")
+    # Create a mapping from GSTIN to the first found Vendor Name
+    gstin_to_name_map = purchase_df.drop_duplicates(subset=['Vendor_GSTIN']).set_index('Vendor_GSTIN')['Vendor_Name']
+    
+    # Map the names to the GSTR-2B dataframe
+    gstr2b_df['Vendor_Name'] = gstr2b_df['Vendor_GSTIN'].map(gstin_to_name_map)
+    
+    # Log how many were successfully enriched
+    enriched_count = gstr2b_df['Vendor_Name'].notna().sum()
+    total_count = len(gstr2b_df)
+    print(f"Enrichment complete: {enriched_count} of {total_count} GSTR-2B records were updated with a Vendor_Name.")
+    
+    return gstr2b_df
+
+def analyze_tds_data(tds_df: pd.DataFrame) -> List[Dict[str, Any]]:
+    """More robust TDS analysis that handles missing Amount_Paid."""
+    required_cols = ['TDS_Deducted', 'TDS_Section', 'Vendor_Name']
+    if not all(col in tds_df.columns for col in required_cols):
+        print("TDS analysis skipped: Missing one of [TDS_Deducted, TDS_Section, Vendor_Name]")
+        return []
+    
+    findings = []
+    TDS_RULES = {"194C": 0.02, "194J": 0.10, "194I": 0.10}
+    
+    df = tds_df.copy()
+    df['TDS_Deducted'] = pd.to_numeric(df['TDS_Deducted'], errors='coerce').fillna(0)
+    df['TDS_Section'] = df['TDS_Section'].astype(str).str.strip().str.upper()
+    
+    # If Amount_Paid is missing, we can't check for correctness, but we can check for other issues.
+    if 'Amount_Paid' not in df.columns:
+        print("TDS analysis running in limited mode: 'Amount_Paid' column not found.")
+        # Example of a limited check: Flag any non-standard TDS sections
+        for _, row in df.iterrows():
+            if row['TDS_Section'] not in TDS_RULES:
+                findings.append({
+                    "issue_type": "TDS_UNKNOWN_SECTION", "vendor": row['Vendor_Name'],
+                    "section": row['TDS_Section'], "tds_deducted": row['TDS_Deducted'],
+                    "details": f"TDS deducted under an unrecognized or non-standard section '{row['TDS_Section']}'."
+                })
+        return findings
+
+    # Full analysis if Amount_Paid is present
+    df['Amount_Paid'] = pd.to_numeric(df['Amount_Paid'], errors='coerce').fillna(0)
+    for _, row in df.iterrows():
+        section = row['TDS_Section']
+        rate = TDS_RULES.get(section)
+        if not rate: continue
+        
+        expected_tds = row['Amount_Paid'] * rate
+        if abs(row['TDS_Deducted'] - expected_tds) > 1: # Allow for rounding differences
+            findings.append({
+                "issue_type": "TDS_INCORRECT_DEDUCTION", "vendor": row['Vendor_Name'],
+                "amount_paid": row['Amount_Paid'], "section": section,
+                "expected_tds": round(expected_tds, 2), "tds_deducted": row['TDS_Deducted'],
+                "details": f"Shortfall of {(expected_tds - row['TDS_Deducted']):.2f}"
+            })
+    return findings
+
+# --- CORE ANALYSIS FUNCTIONS (Unchanged) ---
 def calculate_vendor_spend_exposure(purchase_df: pd.DataFrame, top_n: int = 10) -> Dict[str, Any]:
     if 'Total_Invoice_Value' not in purchase_df.columns or 'Vendor_Name' not in purchase_df.columns:
         return {"total_spend": 0, "top_vendors": [], "concentration_percentage": 0}
@@ -490,8 +559,6 @@ def calculate_vendor_spend_exposure(purchase_df: pd.DataFrame, top_n: int = 10) 
         "concentration_percentage": round((top_spend / total_spend) * 100, 2)
     }
 
-# In main.py
-
 def calculate_invoice_quality_score(purchase_df: pd.DataFrame) -> Dict[str, Any]:
     if purchase_df.empty: 
         return {"score": 0, "grade": "N/A", "total_invoices": 0, "po_linked": 0}
@@ -503,25 +570,14 @@ def calculate_invoice_quality_score(purchase_df: pd.DataFrame) -> Dict[str, Any]
 
     score = round((po_linked / total_invoices) * 100) if total_invoices > 0 else 0
 
-    # --- NEW: Grading Logic ---
     grade = "N/A"
-    if score >= 95:
-        grade = "A+"
-    elif score >= 85:
-        grade = "A"
-    elif score >= 70:
-        grade = "B"
-    elif score >= 50:
-        grade = "C"
-    else:
-        grade = "F"
+    if score >= 95: grade = "A+"
+    elif score >= 85: grade = "A"
+    elif score >= 70: grade = "B"
+    elif score >= 50: grade = "C"
+    else: grade = "F"
     
-    return {
-        "score": score, 
-        "grade": grade, # The new grade
-        "total_invoices": total_invoices, 
-        "po_linked": po_linked
-    }
+    return {"score": score, "grade": grade, "total_invoices": total_invoices, "po_linked": po_linked}
 
 def analyze_monthly_spend_trends(purchase_df: pd.DataFrame) -> List[Dict[str, Any]]:
     if 'Invoice_Date' not in purchase_df.columns or 'Total_Invoice_Value' not in purchase_df.columns:
@@ -541,39 +597,27 @@ def analyze_monthly_spend_trends(purchase_df: pd.DataFrame) -> List[Dict[str, An
     return monthly_spend.to_dict('records')
 
 def analyze_gstr_3b_vs_2b(gstr2b_df: pd.DataFrame, gstr3b_df: pd.DataFrame) -> List[Dict[str, Any]]:
-    """A high-level comparison of ITC claimed vs. available."""
-    findings = []
-    # --- FIX: Add defensive checks for required columns ---
     required_2b_cols = ['Total_Invoice_Value']
     required_3b_cols = ['ITC_Claimed']
 
     if gstr2b_df.empty or gstr3b_df.empty or \
        not all(col in gstr2b_df.columns for col in required_2b_cols) or \
        not all(col in gstr3b_df.columns for col in required_3b_cols):
-        return [] # Return early if data or columns are missing
+        return []
 
     try:
-        # --- FIX: Use .get() with a default or ensure numeric conversion ---
         itc_available = pd.to_numeric(gstr2b_df['Total_Invoice_Value'], errors='coerce').sum()
         itc_claimed = pd.to_numeric(gstr3b_df['ITC_Claimed'], errors='coerce').sum()
 
         if itc_claimed > itc_available:
-            findings.append({
-                "issue_type": "EXCESS_ITC_CLAIMED",
-                "vendor": "N/A", # Add placeholder for fingerprinting
-                "invoice_number": "N/A", # Add placeholder
+            return [{
+                "issue_type": "EXCESS_ITC_CLAIMED", "vendor": "N/A", "invoice_number": "N/A",
                 "details": f"ITC claimed in GSTR-3B (₹{itc_claimed:,.2f}) exceeds ITC available in GSTR-2B (₹{itc_available:,.2f}).",
                 "amount": round(itc_claimed - itc_available, 2)
-            })
+            }]
     except Exception as e:
         print(f"Error in GSTR-3B vs 2B analysis: {e}")
-        # Don't crash the app, just log the error and continue
-    return findings
-
-
-
-
-
+    return []
 
 def find_duplicate_invoices(df: pd.DataFrame) -> List[Dict[str, Any]]:
     required_cols = ['Vendor_Name', 'Invoice_Number', 'Invoice_Date', 'Total_Invoice_Value']
@@ -584,126 +628,54 @@ def find_duplicate_invoices(df: pd.DataFrame) -> List[Dict[str, Any]]:
     if duplicates_df.empty:
         return []
     
-    grouped = duplicates_df.groupby(['Vendor_Name', 'Invoice_Number', 'Invoice_Date'])
     findings = []
-    for _, group in grouped:
-        first_invoice = group.iloc[0]
+    for _, group in duplicates_df.groupby(['Vendor_Name', 'Invoice_Number', 'Invoice_Date']):
+        first = group.iloc[0]
         findings.append({
-            "issue_type": "DUPLICATE_INVOICE",
-            "invoice_number": first_invoice['Invoice_Number'],
-            "vendor": first_invoice['Vendor_Name'],
-            "amount": float(first_invoice['Total_Invoice_Value']),
-            "count": len(group),
-            "details": f"Found {len(group)} instances."
+            "issue_type": "DUPLICATE_INVOICE", "invoice_number": first['Invoice_Number'],
+            "vendor": first['Vendor_Name'], "amount": float(first['Total_Invoice_Value']),
+            "count": len(group), "details": f"Found {len(group)} instances."
         })
     return findings
 
 def find_invoices_without_po(df: pd.DataFrame) -> List[Dict[str, Any]]:
-    if 'Has_PO' not in df.columns:
-        return []
-    
+    if 'Has_PO' not in df.columns: return []
     no_po_df = df[df['Has_PO'].astype(str).str.upper().isin(['NO', 'N', ''])]
-    findings = []
-    for _, row in no_po_df.iterrows():
-        findings.append({
-            "issue_type": "INVOICE_WITHOUT_PO",
-            "invoice_number": row['Invoice_Number'],
-            "vendor": row['Vendor_Name'],
-            "amount": float(row['Total_Invoice_Value']),
-            "details": "No Purchase Order linked."
-        })
-    return findings
+    return [{
+        "issue_type": "INVOICE_WITHOUT_PO", "invoice_number": row['Invoice_Number'],
+        "vendor": row['Vendor_Name'], "amount": float(row['Total_Invoice_Value']),
+        "details": "No Purchase Order linked."
+    } for _, row in no_po_df.iterrows()]
 
 def analyze_vendor_data(purchase_df: pd.DataFrame) -> List[Dict[str, Any]]:
-    all_findings = []
-    all_findings.extend(find_duplicate_invoices(purchase_df))
-    all_findings.extend(find_invoices_without_po(purchase_df))
-    return all_findings
-
-def analyze_tds_data(tds_df: pd.DataFrame) -> List[Dict[str, Any]]:
-    required_cols = ['Amount_Paid', 'TDS_Deducted', 'TDS_Section', 'Vendor_Name']
-    if not all(col in tds_df.columns for col in required_cols):
-        return []
-    
-    findings = []
-    TDS_RULES = {
-        "194C": {"threshold": 30000, "rate": 0.02},
-        "194J": {"threshold": 30000, "rate": 0.10},
-        "194I": {"threshold": 240000, "rate": 0.10}
-    }
-    
-    df_copy = tds_df.copy()
-    df_copy['Amount_Paid'] = pd.to_numeric(df_copy['Amount_Paid'], errors='coerce')
-    df_copy['TDS_Deducted'] = pd.to_numeric(df_copy['TDS_Deducted'], errors='coerce').fillna(0)
-    df_copy['TDS_Section'] = df_copy['TDS_Section'].astype(str).str.strip().str.upper()
-    
-    for _, row in df_copy.iterrows():
-        section = row['TDS_Section']
-        if section not in TDS_RULES:
-            continue
-            
-        rules, amount_paid, tds_deducted = TDS_RULES[section], row['Amount_Paid'], row['TDS_Deducted']
-        
-        if amount_paid > rules['threshold']:
-            expected_tds = amount_paid * rules['rate']
-            if tds_deducted == 0:
-                findings.append({
-                    "issue_type": "TDS_NOT_DEDUCTED",
-                    "vendor": row['Vendor_Name'],
-                    "amount_paid": amount_paid,
-                    "section": section,
-                    "expected_tds": round(expected_tds, 2),
-                    "tds_deducted": None,
-                    "details": f"Expected {expected_tds:.2f}"
-                })
-            elif abs(tds_deducted - expected_tds) > 1:
-                findings.append({
-                    "issue_type": "TDS_INCORRECT_DEDUCTION",
-                    "vendor": row['Vendor_Name'],
-                    "amount_paid": amount_paid,
-                    "section": section,
-                    "expected_tds": round(expected_tds, 2),
-                    "tds_deducted": tds_deducted,
-                    "details": f"Shortfall of {(expected_tds - tds_deducted):.2f}"
-                })
-    return findings
+    return find_duplicate_invoices(purchase_df) + find_invoices_without_po(purchase_df)
 
 def analyze_gst_data(purchase_df: pd.DataFrame, gstr2b_df: pd.DataFrame) -> List[Dict[str, Any]]:
-    required_purchase_cols = ['Invoice_Number', 'Vendor_GSTIN', 'Vendor_Name', 'Total_Invoice_Value']
-    required_gstr2b_cols = ['Invoice_Number', 'Vendor_GSTIN', 'Vendor_Name', 'Total_Invoice_Value']
-    
-    if not all(col in purchase_df.columns for col in required_purchase_cols) or not all(col in gstr2b_df.columns for col in required_gstr2b_cols):
+    req_p = ['Invoice_Number', 'Vendor_GSTIN', 'Total_Invoice_Value', 'Vendor_Name']
+    req_2b = ['Invoice_Number', 'Vendor_GSTIN', 'Total_Invoice_Value', 'Vendor_Name']
+    if not all(c in purchase_df.columns for c in req_p) or not all(c in gstr2b_df.columns for c in req_2b):
+        print("GST analysis skipped: Missing required columns in Purchase Register or GSTR-2B.")
         return []
-    
+
     def standardize(df):
-        df = df.copy()
-        df['Invoice_Number_Std'] = df['Invoice_Number'].astype(str).str.upper().str.strip()
-        df['Vendor_GSTIN_Std'] = df['Vendor_GSTIN'].astype(str).str.upper().str.strip()
-        return df
+        df_c = df.copy()
+        for col in ['Invoice_Number', 'Vendor_GSTIN']:
+            df_c[f"{col}_Std"] = df_c[col].astype(str).str.upper().str.strip()
+        return df_c
     
-    std_purchase, std_2b = standardize(purchase_df), standardize(gstr2b_df)
+    std_p, std_2b = standardize(purchase_df), standardize(gstr2b_df)
+    merge_cols = ['Invoice_Number_Std', 'Vendor_GSTIN_Std']
+
+    merged = pd.merge(std_p, std_2b, on=merge_cols, how='outer', indicator=True, suffixes=('_p', '_2b'))
     
-    unclaimed = pd.merge(std_2b, std_purchase, on=['Invoice_Number_Std', 'Vendor_GSTIN_Std'], how='left', indicator=True).query('_merge == "left_only"')
-    risky = pd.merge(std_purchase, std_2b, on=['Invoice_Number_Std', 'Vendor_GSTIN_Std'], how='left', indicator=True).query('_merge == "left_only"')
+    risky = merged[merged['_merge'] == 'left_only']
+    unclaimed = merged[merged['_merge'] == 'right_only']
     
     findings = []
-    for _, row in unclaimed.iterrows():
-        findings.append({
-            "issue_type": "UNCLAIMED_ITC",
-            "invoice_number": row['Invoice_Number_x'],
-            "vendor": row['Vendor_Name_x'],
-            "amount": float(row['Total_Invoice_Value_x']),
-            "details": "In GSTR-2B, not purchase register."
-        })
-    
     for _, row in risky.iterrows():
-        findings.append({
-            "issue_type": "RISKY_ITC",
-            "invoice_number": row['Invoice_Number_x'],
-            "vendor": row['Vendor_Name_x'],
-            "amount": float(row['Total_Invoice_Value_x']),
-            "details": "In purchase register, not GSTR-2B."
-        })
+        findings.append({"issue_type": "RISKY_ITC", "invoice_number": row['Invoice_Number_p'], "vendor": row['Vendor_Name_p'], "amount": float(row['Total_Invoice_Value_p']), "details": "In purchase register, not GSTR-2B."})
+    for _, row in unclaimed.iterrows():
+        findings.append({"issue_type": "UNCLAIMED_ITC", "invoice_number": row['Invoice_Number_2b'], "vendor": row['Vendor_Name_2b'], "amount": float(row['Total_Invoice_Value_2b']), "details": "In GSTR-2B, not purchase register."})
     
     return findings
 
@@ -718,17 +690,8 @@ def calculate_vendor_totals(findings: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 def calculate_tds_totals(findings: List[Dict[str, Any]]) -> Dict[str, Any]:
-    total_shortfall = 0
-    for f in findings:
-        if f['issue_type'] == 'TDS_NOT_DEDUCTED':
-            total_shortfall += f.get('expected_tds', 0)
-        elif f['issue_type'] == 'TDS_INCORRECT_DEDUCTION':
-            total_shortfall += f.get('expected_tds', 0) - (f.get('tds_deducted') or 0)
-    
-    return {
-        "total_liability_risk": round(total_shortfall, 2),
-        "detailed_findings": findings
-    }
+    total_shortfall = sum(f.get('expected_tds', 0) - (f.get('tds_deducted') or 0) for f in findings if f['issue_type'] == 'TDS_INCORRECT_DEDUCTION')
+    return {"total_liability_risk": round(total_shortfall, 2), "detailed_findings": findings}
 
 def calculate_gst_totals(findings: List[Dict[str, Any]]) -> Dict[str, Any]:
     unclaimed_itc = sum(f['amount'] for f in findings if f['issue_type'] == 'UNCLAIMED_ITC')
@@ -739,161 +702,85 @@ def calculate_gst_totals(findings: List[Dict[str, Any]]) -> Dict[str, Any]:
         "detailed_findings": findings
     }
 
-async def read_optional_file(file: Optional[UploadFile]) -> pd.DataFrame:
-    """Safely reads an optional uploaded file into a DataFrame."""
-    if not file or not file.filename:
-        return pd.DataFrame()
-    content = await file.read()
-    if not content:
-        return pd.DataFrame()
-    try:
-        if file.filename.endswith('.csv'):
-            return pd.read_csv(io.BytesIO(content), dtype=str, keep_default_na=False)
-        else:
-            return pd.read_excel(io.BytesIO(content), engine='openpyxl', dtype=str, keep_default_na=False)
-    except Exception as e:
-        print(f"Warning: Could not read file {file.filename}. Error: {e}")
-        return pd.DataFrame()
-
-
-
-# In main.py
 async def get_admin_user(current_user: models.User = Depends(get_current_user)):
     if not current_user.is_admin:
         raise HTTPException(status_code=403, detail="You do not have permission to access this resource.")
     return current_user
 
-# In main.py
 @app.get("/admin/metrics", tags=["Admin"], dependencies=[Depends(get_admin_user)])
 async def get_admin_metrics(db: Session = Depends(get_db)):
     total_users = db.query(models.User).count()
     total_audits = db.query(models.Audit).count()
     total_findings = db.query(models.AuditFinding).count()
-    
-    # More advanced: users with active subscriptions
-    active_subscriptions = db.query(models.User).filter(
-        models.User.access_valid_until > datetime.now(timezone.utc)
-    ).count()
-
-    return {
-        "total_users": total_users,
-        "total_audits_run": total_audits,
-        "total_findings_identified": total_findings,
-        "active_subscriptions": active_subscriptions
-    }
-# In main.py, with the other analysis functions
+    active_subscriptions = db.query(models.User).filter(models.User.access_valid_until > datetime.now(timezone.utc)).count()
+    return {"total_users": total_users, "total_audits_run": total_audits, "total_findings_identified": total_findings, "active_subscriptions": active_subscriptions}
 
 def analyze_payment_patterns(purchase_df: pd.DataFrame, tds_df: pd.DataFrame) -> Dict[str, Any]:
-    """
-    Analyzes payment cycles, weekend payments, and other patterns.
-    This requires merging purchase data (for invoice dates) with payment data (for payment dates).
-    """
-    # Define default return structure
-    default_patterns = {
-        "avg_payment_days": "N/A",
-        "weekend_payments": 0,
-        "late_payments": 0,
-        "bulk_payment_days": 0,
-    }
-
-    # --- Defensive Checks ---
-    required_purchase_cols = ['Invoice_Date', 'Vendor_Name', 'Invoice_Number']
-    required_tds_cols = ['Payment_Date', 'Vendor_Name', 'Amount_Paid']
-    if purchase_df.empty or tds_df.empty or \
-       not all(col in purchase_df.columns for col in required_purchase_cols) or \
-       not all(col in tds_df.columns for col in required_tds_cols):
+    default_patterns = {"avg_payment_days": "N/A", "weekend_payments": 0, "late_payments": 0, "bulk_payment_days": 0}
+    req_p = ['Invoice_Date', 'Vendor_Name']
+    req_t = ['Payment_Date', 'Vendor_Name']
+    if purchase_df.empty or tds_df.empty or not all(c in purchase_df.columns for c in req_p) or not all(c in tds_df.columns for c in req_t):
         return default_patterns
-
-    # --- Data Preparation ---
-    p_df = purchase_df.copy()
-    t_df = tds_df.copy()
-
-    # Convert dates, coercing errors to NaT (Not a Time)
+    
+    p_df = purchase_df.copy(); t_df = tds_df.copy()
     p_df['Invoice_Date'] = pd.to_datetime(p_df['Invoice_Date'], errors='coerce')
     t_df['Payment_Date'] = pd.to_datetime(t_df['Payment_Date'], errors='coerce')
-    
-    # Drop rows where dates could not be parsed
-    p_df.dropna(subset=['Invoice_Date'], inplace=True)
-    t_df.dropna(subset=['Payment_Date'], inplace=True)
-
-    if p_df.empty or t_df.empty:
-        return default_patterns
+    p_df.dropna(subset=['Invoice_Date'], inplace=True); t_df.dropna(subset=['Payment_Date'], inplace=True)
+    if p_df.empty or t_df.empty: return default_patterns
         
-    # --- Merge DataFrames ---
-    # A simple merge on Vendor_Name is a good heuristic. A more advanced version
-    # could try to match on Invoice_Number if available in both.
-    # We use a left merge to keep all payments and find their corresponding invoice date.
-    merged_df = pd.merge(t_df, p_df, on='Vendor_Name', how='left', suffixes=('_payment', '_invoice'))
-    
-    # Drop rows where no matching invoice date was found
-    merged_df.dropna(subset=['Invoice_Date'], inplace=True)
+    merged_df = pd.merge(t_df, p_df, on='Vendor_Name', how='left').dropna(subset=['Invoice_Date'])
+    if merged_df.empty: return default_patterns
 
-    if merged_df.empty:
-        return default_patterns
-
-    # --- Calculations ---
-
-    # 1. Average Payment Days
     merged_df['payment_days'] = (merged_df['Payment_Date'] - merged_df['Invoice_Date']).dt.days
-    # Filter out negative days which indicate bad data (payment before invoice)
     valid_payments = merged_df[merged_df['payment_days'] >= 0]
     avg_days = int(valid_payments['payment_days'].mean()) if not valid_payments.empty else "N/A"
+    weekend_payments = merged_df[merged_df['Payment_Date'].dt.dayofweek.isin([5, 6])].shape[0]
+    late_payments = valid_payments[valid_payments['payment_days'] > 30].shape[0]
+    bulk_days = t_df.groupby(t_df['Payment_Date'].dt.date).size().pipe(lambda s: s[s >= 10].count())
 
-    # 2. Weekend Payments
-    # Day 5 is Saturday, Day 6 is Sunday
-    weekend_payments_count = merged_df[merged_df['Payment_Date'].dt.dayofweek.isin([5, 6])].shape[0]
-
-    # 3. Late Payments (payments taking > 30 days)
-    late_payments_count = valid_payments[valid_payments['payment_days'] > 30].shape[0]
-
-    # 4. Bulk Payment Days
-    payment_counts_per_day = t_df.groupby(t_df['Payment_Date'].dt.date).size()
-    bulk_days_count = payment_counts_per_day[payment_counts_per_day >= 10].count()
-
-    return {
-        "avg_payment_days": avg_days,
-        "weekend_payments": weekend_payments_count,
-        "late_payments": late_payments_count,
-        "bulk_payment_days": int(bulk_days_count),
-    }
+    return {"avg_payment_days": avg_days, "weekend_payments": weekend_payments, "late_payments": late_payments, "bulk_payment_days": int(bulk_days)}
 
 @retry(stop=stop_after_attempt(3), wait=wait_random_exponential(min=1, max=4))
 async def generate_summary(summary_data: Dict[str, Any], issue_category: str) -> str:
-    if not summary_data.get("detailed_findings"):
-        return f"No significant issues found."
+    if not summary_data.get("detailed_findings"): return f"No significant issues found for {issue_category}."
     
     summary_json = json.dumps(summary_data)
-    prompt = f"""As a senior financial auditor, your task is to write a brief, professional summary paragraph for a busy CFO based *only* on the data provided below.
-    **CRITICAL INSTRUCTIONS:**
-    1.  **Source of Truth:** The financial totals in the provided JSON data are the absolute source of truth. You MUST repeat these numbers exactly as they appear in your summary. For example, if the data shows `{{"risky_itc_exposure": 253700.0, ...}}`, your summary text absolutely must include the number `253,700`. Do not add, remove, or change any digits.
-    2.  **Content Focus:** Your paragraph should concisely cover three things:
-        *   State the primary financial impact using the pre-calculated totals.
-        *   Explain the business risk or opportunity (e.g., "This exposes the company to penalties..." or "This represents a missed opportunity to improve cash flow...").
-        *   Provide a high-level, actionable recommendation for the finance team.
-    3.  **Format:**
-        *   A single, professional paragraph.
-        *   Do NOT use bullet points or markdown lists.
-        *   Maintain the persona of an experienced auditor addressing a CFO.
-    **Category to Summarize:** {issue_category}
-    **Data (Source of Truth):**
-    {summary_json[:2500]}"""
+    prompt = f"""As a senior financial auditor, write a brief, professional summary paragraph for a CFO based ONLY on the data below.
+    CRITICAL: You MUST use the exact financial totals provided in the JSON. For example, if data is `{{"risky_itc_exposure": 253700.0, ...}}`, you MUST include the number `253,700` in your summary.
+    Your paragraph should state the financial impact, explain the business risk/opportunity, and give a high-level recommendation.
+    Category: {issue_category}
+    Data:
+    {summary_json[:2000]}"""
     
+    response = await acompletion(
+        model="groq/llama3-70b-8192", messages=[{"role": "user", "content": prompt}], max_tokens=250
+    )
+    return response.choices[0].message.content.strip()
+
+def serialize_analysis(analysis_data: Any) -> Any:
+    if isinstance(analysis_data, (np.integer, np.floating)):
+        return int(analysis_data) if isinstance(analysis_data, np.integer) else float(analysis_data)
+    elif isinstance(analysis_data, dict):
+        return {k: serialize_analysis(v) for k, v in analysis_data.items()}
+    elif isinstance(analysis_data, (list, tuple)):
+        return [serialize_analysis(x) for x in analysis_data]
+    return analysis_data
+
+async def generate_strategic_recommendations(full_analysis: dict) -> str:
+    prompt = f"""As a senior financial consultant, generate specific strategic recommendations in HTML format based on these audit results. Do not use the word 'HTML'.
+    Audit Findings: {json.dumps(full_analysis, indent=2)}
+    Requirements: 1. Organize into 3 categories: Process, Vendor, Compliance. 2. Provide 1-2 specific recommendations per category. 3. Format as HTML divs with class 'summary-block'.
+    """
     try:
         response = await acompletion(
-            model="groq/llama3-70b-8192",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=300
+            model="groq/llama3-70b-8192", messages=[{"role": "user", "content": prompt}], temperature=0.7
         )
-        return response.choices[0].message.content.strip()
+        return response.choices[0].message.content
     except Exception as e:
-        return f"Could not generate AI summary: {e}"
+        print(f"Failed to generate recommendations: {e}")
+        return "<p>Could not generate strategic recommendations.</p>"
 
-# ==================== SECURED REPORT ENDPOINT ====================
-
-# --- Initialize Supabase Client ---
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
-
-# ==================== SECURED REPORT ENDPOINT ====================
+# ==================== SECURED REPORT ENDPOINT (ROBUST) ====================
 
 @app.post("/generate-report/", tags=["Report Generation"])
 async def generate_report_from_files(
@@ -907,156 +794,102 @@ async def generate_report_from_files(
     current_user: models.User = Depends(get_current_active_user),
     db: Session = Depends(get_db)
 ):
-    print(f"[{datetime.now()}] --- NEW ENHANCED REPORT REQUEST for {company_name} ---")
+    print(f"[{datetime.now()}] --- REPORT REQUEST for {company_name} ---")
     
-    # --- Step 1: Read all files safely ---
-    p_df, t_df, g2b_df, g3b_df, vm_df, sr_df = await asyncio.gather(
-        read_optional_file(purchase_file),
-        read_optional_file(tds_file),
-        read_optional_file(gstr2b_file),
-        read_optional_file(gstr3b_file),
-        read_optional_file(vendor_master_file),
-        read_optional_file(sales_register_file),
-    )
+    # --- Step 1 & 2: Read and Map all files SEQUENTIALLY ---
+    print(f"[{datetime.now()}] STEP 1&2: Starting sequential file mapping...")
+    files_to_process = [
+        (purchase_file, "purchase"), (tds_file, "tds"), (gstr2b_file, "gstr2b"),
+        (gstr3b_file, "gstr3b"), (vendor_master_file, "vendor_master"), (sales_register_file, "sales_register")
+    ]
+    mapped_dfs = {doc_type: await map_uploaded_file_to_df(file, doc_type) for file, doc_type in files_to_process}
     
-    # --- Step 2: AI Column Mapping (UPDATED) ---
-    print(f"[{datetime.now()}] STEP 2: Starting AI column mapping for all files...")
-    mapped_p_df, mapped_t_df, mapped_g2b_df, mapped_g3b_df, mapped_vm_df, mapped_sr_df = await asyncio.gather(
-        extract_semantic_fields(p_df, "purchase"),
-        extract_semantic_fields(t_df, "tds"),
-        extract_semantic_fields(g2b_df, "gstr2b"),
-        extract_semantic_fields(g3b_df, "gstr3b"),
-        extract_semantic_fields(vm_df, "vendor_master"),
-        extract_semantic_fields(sr_df, "sales_register")
-    )
-    print(f"[{datetime.now()}] STEP 2 SUCCESS: AI mapping complete.")
+    # --- Step 2.5: Data Enrichment ---
+    print(f"[{datetime.now()}] STEP 2.5: Enriching data...")
+    mapped_dfs["gstr2b"] = enrich_gstr2b_data(mapped_dfs["gstr2b"], mapped_dfs["purchase"])
+    print(f"[{datetime.now()}] STEP 2.5 SUCCESS: Data enrichment complete.")
+
+    mapped_p_df = mapped_dfs["purchase"]
+    mapped_t_df = mapped_dfs["tds"]
+    mapped_g2b_df = mapped_dfs["gstr2b"]
+    mapped_g3b_df = mapped_dfs["gstr3b"]
 
     # --- Step 3: Core & Strategic Analysis ---
-    all_findings = []
-    
-    # Core Compliance Analysis
+    print(f"[{datetime.now()}] STEP 3: Starting analysis...")
     vendor_findings = analyze_vendor_data(mapped_p_df)
     tds_findings = analyze_tds_data(mapped_t_df)
     gst_findings = analyze_gst_data(mapped_p_df, mapped_g2b_df)
     gstr_3b_findings = analyze_gstr_3b_vs_2b(mapped_g2b_df, mapped_g3b_df)
-    all_findings.extend(vendor_findings)
-    all_findings.extend(tds_findings)
-    all_findings.extend(gst_findings)
-    all_findings.extend(gstr_3b_findings)
+    all_findings = vendor_findings + tds_findings + gst_findings + gstr_3b_findings
+    print(f"[{datetime.now()}] STEP 3 SUCCESS: Analysis complete. Found {len(all_findings)} total findings.")
 
-    # Strategic Intelligence Analysis
     vendor_exposure = calculate_vendor_spend_exposure(mapped_p_df)
     iqs_score = calculate_invoice_quality_score(mapped_p_df)
     spend_trends = analyze_monthly_spend_trends(mapped_p_df)
-
-    # --- ADD THE NEW ANALYSIS CALL HERE ---
     payment_patterns = analyze_payment_patterns(mapped_p_df, mapped_t_df)
     
-    # --- Step 4: "Memory Lite" Engine ---
-    new_audit = models.Audit(user_id=current_user.id, company_name=company_name)
-    db.add(new_audit)
-    db.commit()
-    db.refresh(new_audit)
-    audit_id = new_audit.id
-
+    # --- Step 4: Memory Engine ---
+    print(f"[{datetime.now()}] STEP 4: Running Memory Engine...")
+    existing_audits = db.query(models.Audit.id).filter(models.Audit.user_id == current_user.id, models.Audit.company_name == company_name).all()
     
     for finding in all_findings:
-        fingerprint_keys = ['vendor', 'invoice_number', 'section', 'amount']
-        fingerprint_str = f"{finding['issue_type']}-" + "-".join([str(finding.get(k, '')) for k in fingerprint_keys])
-        
-        # --- THE CORRECTED QUERY ---
-        # We now JOIN through the Audit table to check the user_id
-        past_findings_count = db.query(models.AuditFinding).join(models.Audit).filter(
-            models.Audit.user_id == current_user.id,
-            models.AuditFinding.fingerprint == fingerprint_str
-        ).count()
-        
-        is_repeat = past_findings_count > 0
-        finding['is_repeat'] = is_repeat
-        finding['past_occurrences'] = past_findings_count
+        fingerprint_parts = [company_name, finding['issue_type'], str(finding.get('vendor', '')), str(finding.get('invoice_number', '')), str(finding.get('amount', ''))]
+        finding['fingerprint'] = "-".join(filter(None, fingerprint_parts))
+    
+    historical_counts = {}
+    if existing_audits:
+        audit_ids = [a.id for a in existing_audits]
+        historical_results = db.query(models.AuditFinding.fingerprint, func.count(models.AuditFinding.id)).filter(models.AuditFinding.audit_id.in_(audit_ids)).group_by(models.AuditFinding.fingerprint).all()
+        historical_counts = dict(historical_results)
 
-        # --- THE CORRECTED OBJECT CREATION (matches your new models.py) ---
-        db_finding = models.AuditFinding(
-            audit_id=audit_id,
-            # user_id is correctly removed
-            issue_type=finding['issue_type'],
-            details=json.dumps({k: v for k, v in finding.items() if k not in ['is_repeat', 'past_occurrences']}),
-            fingerprint=fingerprint_str,
-            is_repeat=is_repeat
-        )
-        db.add(db_finding)
+    for finding in all_findings:
+        count = historical_counts.get(finding['fingerprint'], 0)
+        finding['past_occurrences'] = count
+        finding['is_repeat'] = count > 0
 
+    new_audit = models.Audit(user_id=current_user.id, company_name=company_name)
+    db.add(new_audit)
+    db.flush()
+
+    for finding in all_findings:
+        db.add(models.AuditFinding(audit_id=new_audit.id, issue_type=finding['issue_type'], details=json.dumps({k: v for k, v in finding.items() if k not in ['is_repeat', 'past_occurrences', 'fingerprint']}), fingerprint=finding['fingerprint'], is_repeat=finding['is_repeat']))
     db.commit()
+    print(f"[{datetime.now()}] STEP 4 SUCCESS: Memory Engine complete. Saved audit {new_audit.id}.")
 
-
-    # --- Step 4.5: Calculate Totals & Generate AI Summaries ---
-    print(f"[{datetime.now()}] STEP 4.5: Calculating totals for AI summary...")
-    vendor_summary_data = calculate_vendor_totals(vendor_findings)
-    tds_summary_data = calculate_tds_totals(tds_findings)
-    # Combine all GST-related findings for a comprehensive summary
-    all_gst_findings = gst_findings + gstr_3b_findings
-    gst_summary_data = calculate_gst_totals(all_gst_findings)
-    
-    print(f"[{datetime.now()}] STEP 4.5a: Starting AI summary generation...")
+    # --- Step 5: Generate AI Summaries ---
     vendor_summary, tds_summary, gst_summary = await asyncio.gather(
-        generate_summary(vendor_summary_data, "Vendor & Payment Risks"),
-        generate_summary(tds_summary_data, "TDS Compliance Risks"),
-        generate_summary(gst_summary_data, "GST Compliance & ITC Reconciliation")
-    )
-    print(f"[{datetime.now()}] STEP 4.5b SUCCESS: AI summaries generated.")
-
-    # --- Step 5: Render PDF Report ---
-    # Now this line will work because the variables are defined
-   
-    # --- Step 5: Render PDF Report ---
-    template = env.get_template("report_template.html")
-    html_out = await template.render_async(
-        company_name=company_name,
-        report_date=datetime.now().strftime("%d %B %Y"),
-        audit_period="Q2 2024-25", # You can make this dynamic later
-        
-        # Pass all the findings
-        vendor_findings=vendor_findings,
-        gst_findings=gst_findings,
-        tds_findings=tds_findings,
-        gstr_3b_findings=gstr_3b_findings,
-        
-        # Pass strategic intelligence data
-        iqs_score=iqs_score,
-        vendor_exposure=vendor_exposure,
-        spend_trends=spend_trends,
-        
-        # --- PASS THE NEW PAYMENT PATTERNS DATA ---
-        payment_patterns=payment_patterns,
-
-        # AI Summaries (if you generate them)
-        vendor_summary=vendor_summary, # Assuming you generate these
-        gst_summary=gst_summary,
-        tds_summary=tds_summary,
+        generate_summary(calculate_vendor_totals(vendor_findings), "Vendor & Payment Risks"),
+        generate_summary(calculate_tds_totals(tds_findings), "TDS Compliance Risks"),
+        generate_summary(calculate_gst_totals(gst_findings + gstr_3b_findings), "GST Compliance")
     )
     
+    # --- Step 6: Render and Store PDF Report ---
+    full_analysis = serialize_analysis({"company_name": company_name, "vendor_exposure": vendor_exposure, "iqs_score": iqs_score, "payment_patterns": payment_patterns, "key_findings": {"vendor": vendor_summary, "tds": tds_summary, "gst": gst_summary}})
+    strategic_recommendations = await generate_strategic_recommendations(full_analysis)
+    
+    risk_exposure_values = {'critical': sum(f.get('amount', 0) for f in vendor_findings if f['issue_type'] == 'DUPLICATE_INVOICE'), 'high': sum(f.get('amount', 0) for f in vendor_findings if f['issue_type'] == 'INVOICE_WITHOUT_PO'), 'medium': sum(f.get('amount', 0) for f in gst_findings if f['issue_type'] == 'RISKY_ITC'), 'opportunity': sum(f.get('amount', 0) for f in gst_findings if f['issue_type'] == 'UNCLAIMED_ITC')}
+    total_risk_exposure = sum(risk_exposure_values.values()) - risk_exposure_values['opportunity'] + calculate_tds_totals(tds_findings)['total_liability_risk']
+    
+    template = env.get_template("report_template.html")
+    render_context = {**full_analysis, "audit_period": "Q2 2024-25", "report_date": datetime.now().strftime("%d %B %Y"), "vendor_findings": vendor_findings, "gst_findings": gst_findings, "tds_findings": tds_findings, "gstr_3b_findings": gstr_3b_findings, "spend_trends": spend_trends, "strategic_recommendations": strategic_recommendations, "risk_exposure": risk_exposure_values, "total_risk_exposure": total_risk_exposure, "now": datetime.now()}
+
+    html_out = await template.render_async(render_context)
     pdf_bytes = HTML(string=html_out).write_pdf()
     
-    # --- Step 6: Store Artifacts ---
-    report_filename = f"{company_name.replace(' ', '_')}_{audit_id}.pdf"
-    storage_path = f"user_{current_user.id}/{audit_id}/{report_filename}"
+    report_filename = f"{company_name.replace(' ', '_')}_{new_audit.id}.pdf"
+    storage_path = f"user_{current_user.id}/{new_audit.id}/{report_filename}"
     
     try:
         supabase.storage.from_("audit-artifacts").upload(file=pdf_bytes, path=storage_path)
-        report_url = supabase.storage.from_("audit-artifacts").get_public_url(storage_path)
-        new_audit.report_url = report_url
+        new_audit.report_url = supabase.storage.from_("audit-artifacts").get_public_url(storage_path)
         db.commit()
     except Exception as e:
         print(f"Supabase upload failed: {e}")
 
-    return StreamingResponse(
-        io.BytesIO(pdf_bytes),
-        media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{report_filename}"'}
-    )
+    return StreamingResponse(io.BytesIO(pdf_bytes), media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="{report_filename}"'})
 
 
-# ==================== NEW DASHBOARD API ENDPOINTS ====================
+# ==================== DASHBOARD API ENDPOINTS ====================
 
 class AuditHistoryItem(BaseModel):
     id: int
@@ -1064,88 +897,54 @@ class AuditHistoryItem(BaseModel):
     timestamp: datetime
     report_url: Optional[str]
 
-# In the Pydantic models section
 class FindingDetailItem(BaseModel):
-    id: int # <-- FIX: Add the ID field
-    issue_type: str
-    details: Dict[str, Any]
-    is_repeat: bool
-    timestamp: datetime
+    id: int; audit_id: int; issue_type: str; details: Dict[str, Any]
+    fingerprint: str; is_repeat: bool; timestamp: datetime
 
 @app.get("/audits/", response_model=List[AuditHistoryItem], tags=["Dashboard"])
 async def get_audit_history(current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Fetches a list of all past audits for the current user."""
-    audits = db.query(models.Audit).filter(models.Audit.user_id == current_user.id).order_by(models.Audit.timestamp.desc()).all()
-    return audits
+    return db.query(models.Audit).filter(models.Audit.user_id == current_user.id).order_by(models.Audit.timestamp.desc()).all()
 
-# In /audits/{audit_id}/findings/ endpoint
 @app.get("/audits/{audit_id}/findings/", response_model=List[FindingDetailItem], tags=["Dashboard"])
-async def get_audit_findings(
-    audit_id: int, 
-    current_user: models.User = Depends(get_current_user), 
-    db: Session = Depends(get_db)
-):
-    """Fetches all findings associated with a specific audit run, verifying the audit belongs to the current user."""
-    # First verify the audit belongs to the current user
-    audit = db.query(models.Audit).filter(
-        models.Audit.id == audit_id,
-        models.Audit.user_id == current_user.id
-    ).first()
-
+async def get_audit_findings(audit_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+    audit = db.query(models.Audit).filter(models.Audit.id == audit_id, models.Audit.user_id == current_user.id).first()
     if not audit:
-        raise HTTPException(
-            status_code=404, 
-            detail="Audit not found or you don't have permission to access it."
-        )
-
-    # Now fetch findings for this audit
-    findings = db.query(models.AuditFinding).filter(
-        models.AuditFinding.audit_id == audit_id
-    ).order_by(models.AuditFinding.timestamp.desc()).all()
-
-    # Transform findings into response model
-    return [
-        FindingDetailItem(
-            id=finding.id,
-            issue_type=finding.issue_type,
-            details=json.loads(finding.details),
-            is_repeat=finding.is_repeat,
-            timestamp=finding.timestamp
-        )
-        for finding in findings
-    ]
+        raise HTTPException(status_code=404, detail="Audit not found or you don't have permission.")
+    
+    findings = db.query(models.AuditFinding).filter(models.AuditFinding.audit_id == audit_id).order_by(models.AuditFinding.timestamp.desc()).all()
+    # Handle potential JSON parsing errors gracefully
+    results = []
+    for f in findings:
+        try:
+            details = json.loads(f.details)
+        except json.JSONDecodeError:
+            details = {"error": "Could not parse details JSON."}
+        results.append(FindingDetailItem(id=f.id, audit_id=f.audit_id, issue_type=f.issue_type, details=details, fingerprint=f.fingerprint, is_repeat=f.is_repeat, timestamp=f.timestamp))
+    return results
 
 
 @app.get("/audits/{audit_id}/export-excel/", tags=["Dashboard"])
 async def export_findings_to_excel(audit_id: int, current_user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """Exports all findings from an audit to an Excel file."""
-    findings_query = db.query(models.AuditFinding).filter(
-        models.AuditFinding.audit_id == audit_id, 
-        models.AuditFinding.user_id == current_user.id
-    ).all()
-
+    audit = db.query(models.Audit).filter(models.Audit.id == audit_id, models.Audit.user_id == current_user.id).first()
+    if not audit:
+        raise HTTPException(status_code=404, detail="Audit not found or you don't have permission.")
+    
+    findings_query = db.query(models.AuditFinding).filter(models.AuditFinding.audit_id == audit_id).all()
     if not findings_query:
         raise HTTPException(status_code=404, detail="No findings found for this audit.")
 
-    # Process findings for Excel export
     data_to_export = []
     for f in findings_query:
-        details = json.loads(f.details)
-        details['issue_type'] = f.issue_type
-        details['is_repeat_issue'] = f.is_repeat
-        details['first_seen'] = f.timestamp.strftime("%Y-%m-%d")
-        data_to_export.append(details)
+        try:
+            details = json.loads(f.details)
+        except json.JSONDecodeError:
+            details = {"error": "Could not parse details JSON."}
+        data_to_export.append({'finding_id': f.id, 'issue_type': f.issue_type, 'is_repeat_issue': f.is_repeat, 'timestamp': f.timestamp.strftime("%Y-%m-%d %H:%M:%S"), **details})
     
     df = pd.DataFrame(data_to_export)
-    
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
         df.to_excel(writer, index=False, sheet_name='Audit_Findings')
-    
     output.seek(0)
     
-    return StreamingResponse(
-        output,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f"attachment; filename=Enviscale_Audit_{audit_id}_Findings.xlsx"}
-    )
+    return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f"attachment; filename=Enviscale_Audit_{audit_id}_Findings.xlsx"})
