@@ -58,18 +58,18 @@ Built with **FastAPI**, **Razorpay payments**, **LLM-powered analysis**, and **a
 ## 📄 Example Use Case
 Scenario: A mid-sized company uploads:
 
-Purchase register (Excel)
+- Purchase register (Excel)
 
-GSTR-2B filing report (Excel)
+- GSTR-2B filing report (Excel)
 
-Vendor payment ledger (CSV)
+- Vendor payment ledger (CSV)
 
 AI Audit Copilot:
 
-Reconciles purchase vs GSTR data → finds GST mismatches
+- Reconciles purchase vs GSTR data → finds GST mismatches
 
-Checks TDS calculations → finds underpaid TDS on two vendors
+- Checks TDS calculations → finds underpaid TDS on two vendors
 
-Flags duplicate vendor payments worth ₹1.2L
+- Flags duplicate vendor payments worth ₹1.2L
 
-Generates PDF report + email delivery
+- Generates PDF report + email delivery
