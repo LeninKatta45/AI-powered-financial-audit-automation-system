@@ -1,6 +1,6 @@
 # AI Audit Copilot
 
-**AI-powered financial audit automation that detects errors, saves time, and reduces compliance risks**
+**Agentic AI-powered financial audit automation that detects errors, saves time, and reduces compliance risks**
 
 [![FastAPI](https://img.shields.io/badge/FastAPI-005571?style=for-the-badge&logo=fastapi)](https://fastapi.tiangolo.com/)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue?style=for-the-badge&logo=python)](https://www.python.org/)
@@ -15,20 +15,56 @@ Built with **FastAPI**, **Razorpay payments**, **LLM-powered analysis**, and **a
 ---
 
 ## 🚀 Key Features
-- **Multi-file reconciliation** — compare & match data from multiple Excel/CSV sources.
-- **Error detection** — automatically finds:
-  - GST mismatches
-  - TDS calculation errors
-  - Duplicate transactions
-  - Vendor payment anomalies
-- **AI-Powered Insights** — uses LLMs to summarize patterns & anomalies in plain English.
-- **Automated PDF Reports** — generates professional, shareable audit reports.
-- **Secure Authentication** — JWT-based user login/signup.
-- **Payment Integration** — Razorpay checkout for paid audits.
-- **Email Delivery** — Sends audit reports via Resend API.
-- **Dockerized Deployment** — ready for cloud hosting.
+
+
+- **🔐 Authentication**
+  - JWT-based login/signup
+  - Password reset with email (Resend integration)
+
+- **💳 Payments**
+  - Razorpay integration for subscription & pay-per-audit
+  - Access control based on verified payments
+
+- **📂 File Handling & Analysis**
+  - Upload CSV/Excel files
+  - Auto column mapping with LLM
+  - Data type normalization & validation
+
+- **🧠 Agentic Audit System**
+  - Vendor spend analysis
+  - TDS/GST reconciliation
+  - Invoice quality check
+  - Payment pattern analysis
+  - Duplicate detection
+  - Findings automatically persisted in DB
+
+- **📊 Reporting**
+  - PDF report generation via Jinja2 + WeasyPrint
+  - Secure Supabase storage & public link sharing
+  - Excel export of audit findings
+
+- **📈 Dashboard APIs**
+  - Audit history
+  - Detailed findings
+  - Export audit results
+
+- **👨‍💻 Admin Metrics**
+  - Track active users, audits, and subscriptions
 
 ---
+
+## 🛠️ Tech Stack
+
+- **Backend:** [FastAPI](https://fastapi.tiangolo.com/) + [SQLAlchemy](https://www.sqlalchemy.org/)  
+- **Database:** PostgreSQL (via [Supabase](https://supabase.com/))  
+- **Auth & Security:** JWT tokens, password hashing (bcrypt)  
+- **Payments:** [Razorpay](https://razorpay.com/docs/)  
+- **Emailing:** [Resend](https://resend.com/) API  
+- **Reports:** [WeasyPrint](https://weasyprint.org/), [Jinja2](https://jinja.palletsprojects.com/)  
+- **Data Processing:** [Pandas](https://pandas.pydata.org/), [XlsxWriter](https://xlsxwriter.readthedocs.io/)  
+- **AI Agents:** Multi-agent orchestration for auditing logic  
+- **Storage:** Supabase Object Storage  
+
 
 ## 📊 How It Works
 
@@ -46,19 +82,6 @@ Built with **FastAPI**, **Razorpay payments**, **LLM-powered analysis**, and **a
 - **PDF Report** — professionally formatted with detected issues & recommendations
 - **JSON Response** — structured output for integration into ERPs or BI tools
 - **Email Delivery** — sends report to the user’s registered email
-
----
-
-## 🛠️ Tech Stack
-- **Backend**: FastAPI, SQLAlchemy, Alembic
-- **Database**: PostgreSQL
-- **AI**: LLMs via `litellm` (Groq API)
-- **Payments**: Razorpay
-- **Email**: Resend API
-- **File Parsing**: Pandas
-- **Reports**: Jinja2 + WeasyPrint
-- **Auth**: JWT, OAuth2
-- **Deployment**: Docker
 
 ---
 
