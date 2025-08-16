@@ -10,7 +10,7 @@
 
 It ingests financial transaction data from multiple sources, reconciles them, and **uncovers hidden errors** in minutes — replacing hours of manual work by finance teams.
 
-Built with **FastAPI**, **Razorpay payments**, **LLM-powered analysis**, and **automated PDF reporting**.
+Built with **FastAPI**, **Razorpay payments**, **Agentic AI-powered analysis**, and **automated PDF reporting**.
 
 ---
 
