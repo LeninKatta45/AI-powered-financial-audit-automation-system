@@ -105,7 +105,7 @@ AI Audit Copilot:
 - Generates PDF report + email delivery
 
 ## 📌 API Highlights
-# 🔐 Auth
+**🔐 Auth**
 
 - POST /signup/ – create user
 
@@ -113,17 +113,17 @@ AI Audit Copilot:
 
 - POST /reset-password/ – send password reset email
 
-# 💳 Payments
+**💳 Payments**
 
 - POST /create-order/ – create Razorpay order
 
 - POST /verify-payment/ – verify payment and activate subscription
 
-# 🧾 Audit (Agentic)
+**🧾 Audit (Agentic)**
 
 - POST /generate-report-agentic/ – upload files, trigger multi-agent audit, generate PDF report
 
-# 📊 Dashboard
+**📊 Dashboard**
 
 - GET /audits/ – list past audits
 
