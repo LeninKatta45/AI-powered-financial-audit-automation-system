@@ -1,4 +1,4 @@
-# AI Audit Copilot
+# Agentic AI Audit Copilot
 
 **Agentic AI-powered financial audit automation that detects errors, saves time, and reduces compliance risks**
 
@@ -103,3 +103,30 @@ AI Audit Copilot:
 - Flags duplicate vendor payments worth ₹1.2L
 
 - Generates PDF report + email delivery
+
+## 📌 API Highlights
+# 🔐 Auth
+
+- POST /signup/ – create user
+
+- POST /login/ – get JWT token
+
+- POST /reset-password/ – send password reset email
+
+# 💳 Payments
+
+- POST /create-order/ – create Razorpay order
+
+- POST /verify-payment/ – verify payment and activate subscription
+
+# 🧾 Audit (Agentic)
+
+- POST /generate-report-agentic/ – upload files, trigger multi-agent audit, generate PDF report
+
+# 📊 Dashboard
+
+- GET /audits/ – list past audits
+
+- GET /audits/{id}/findings/ – audit findings with repeat issue detection
+
+- GET /audits/{id}/export-excel/ – export findings to Excel
